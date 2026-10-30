@@ -83,6 +83,8 @@ fn find_symbol_node<'a>(
 }
 
 pub fn read_symbol(file_path: &str, symbol_path: &str) -> Result<Value> {
+    let validated_path = crate::security::validate_path(file_path)?;
+    let file_path = validated_path.to_str().ok_or_else(|| anyhow!("Invalid UTF-8 in path"))?;
     let language = get_language_for_file(file_path)?;
     let mut parser = Parser::new();
     parser.set_language(&language)?;
@@ -105,6 +107,8 @@ pub fn read_symbol(file_path: &str, symbol_path: &str) -> Result<Value> {
 }
 
 pub fn replace_symbol(file_path: &str, symbol_path: &str, new_code: &str) -> Result<Value> {
+    let validated_path = crate::security::validate_path(file_path)?;
+    let file_path = validated_path.to_str().ok_or_else(|| anyhow!("Invalid UTF-8 in path"))?;
     let language = get_language_for_file(file_path)?;
     let mut parser = Parser::new();
     parser.set_language(&language)?;
@@ -146,6 +150,8 @@ pub fn replace_symbol(file_path: &str, symbol_path: &str, new_code: &str) -> Res
 }
 
 pub fn get_outline(file_path: &str) -> Result<Value> {
+    let validated_path = crate::security::validate_path(file_path)?;
+    let file_path = validated_path.to_str().ok_or_else(|| anyhow!("Invalid UTF-8 in path"))?;
     let language = get_language_for_file(file_path)?;
     let mut parser = Parser::new();
     parser.set_language(&language)?;
@@ -213,7 +219,8 @@ mod tests {
     #[test]
     fn test_get_outline() {
         // Write a small temp rs file
-        let temp_dir = std::env::temp_dir();
+        let temp_dir = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
+        let temp_dir = temp_dir.path();
         let file_path = temp_dir.join("test_outline.rs");
         let code = r#"
             struct Point { x: i32, y: i32 }
@@ -239,7 +246,8 @@ mod tests {
 
     #[test]
     fn test_read_symbol() {
-        let temp_dir = std::env::temp_dir();
+        let temp_dir = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
+        let temp_dir = temp_dir.path();
         let file_path = temp_dir.join("test_read_symbol.rs");
         let code = r#"
             struct Point { x: i32, y: i32 }
@@ -260,7 +268,8 @@ mod tests {
 
     #[test]
     fn test_replace_symbol() {
-        let temp_dir = std::env::temp_dir();
+        let temp_dir = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
+        let temp_dir = temp_dir.path();
         let file_path = temp_dir.join("test_replace_symbol.rs");
         let code = r#"
             struct Point { x: i32, y: i32 }

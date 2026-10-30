@@ -8,6 +8,7 @@ mod bridge;
 mod protocol;
 mod server;
 mod tools;
+mod security;
 
 #[derive(Parser)]
 #[command(name = "enginedge")]
