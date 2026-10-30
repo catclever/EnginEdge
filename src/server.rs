@@ -5,8 +5,9 @@ use tracing::{debug, error, info};
 
 use crate::protocol::*;
 use crate::tools;
+use crate::bridge::CloudBridge;
 
-pub async fn run_stdio_server() -> anyhow::Result<()> {
+pub async fn run_stdio_server(bridge: CloudBridge) -> anyhow::Result<()> {
     let stdin = tokio::io::stdin();
     let mut reader = BufReader::new(stdin).lines();
 
@@ -30,7 +31,7 @@ pub async fn run_stdio_server() -> anyhow::Result<()> {
                 if let Some(id_val) = value.get("id") {
                     // It's a request
                     if let Ok(request) = serde_json::from_value::<JsonRpcRequest>(value.clone()) {
-                        handle_request(request).await;
+                        handle_request(request, &bridge).await;
                     } else {
                         // Malformed request, send standard error if id can be extracted
                         let id = serde_json::from_value::<Id>(id_val.clone()).unwrap_or(Id::Null);
@@ -54,7 +55,7 @@ pub async fn run_stdio_server() -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn handle_request(req: JsonRpcRequest) {
+async fn handle_request(req: JsonRpcRequest, bridge: &CloudBridge) {
     match req.method.as_str() {
         "initialize" => {
             let result = InitializeResult {
@@ -78,6 +79,10 @@ async fn handle_request(req: JsonRpcRequest) {
                     tools::get_outline_tool_def(),
                     tools::read_symbol_tool_def(),
                     tools::replace_symbol_tool_def(),
+                    tools::survey_architecture_tool_def(),
+                    tools::search_code_examples_tool_def(),
+                    tools::fetch_doc_tool_def(),
+                    tools::inspect_spec_tool_def(),
                 ],
             };
             send_response(req.id, json!(result));
@@ -92,6 +97,10 @@ async fn handle_request(req: JsonRpcRequest) {
                         "get_outline" => tools::execute_get_outline(call_params.arguments),
                         "read_symbol" => tools::execute_read_symbol(call_params.arguments),
                         "replace_symbol" => tools::execute_replace_symbol(call_params.arguments),
+                        "survey_architecture" => tools::execute_survey_architecture(call_params.arguments, bridge).await,
+                        "search_code_examples" => tools::execute_search_code_examples(call_params.arguments, bridge).await,
+                        "fetch_doc" => tools::execute_fetch_doc(call_params.arguments, bridge).await,
+                        "inspect_spec" => tools::execute_inspect_spec(call_params.arguments, bridge).await,
                         _ => Err(JsonRpcError {
                             code: -32601,
                             message: format!("Tool not found: {}", call_params.name),
