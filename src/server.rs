@@ -75,6 +75,9 @@ async fn handle_request(req: JsonRpcRequest) {
                     tools::ping_tool_def(),
                     tools::echo_tool_def(),
                     tools::get_status_tool_def(),
+                    tools::get_outline_tool_def(),
+                    tools::read_symbol_tool_def(),
+                    tools::replace_symbol_tool_def(),
                 ],
             };
             send_response(req.id, json!(result));
@@ -84,8 +87,11 @@ async fn handle_request(req: JsonRpcRequest) {
                 if let Ok(call_params) = serde_json::from_value::<CallToolRequestParams>(params) {
                     let result = match call_params.name.as_str() {
                         "ping" => tools::execute_ping(),
-                        "echo" => tools::execute_echo(call_params.arguments),
+                        "echo" => tools::execute_echo(call_params.arguments.clone()),
                         "get_status" => tools::execute_get_status(),
+                        "get_outline" => tools::execute_get_outline(call_params.arguments),
+                        "read_symbol" => tools::execute_read_symbol(call_params.arguments),
+                        "replace_symbol" => tools::execute_replace_symbol(call_params.arguments),
                         _ => Err(JsonRpcError {
                             code: -32601,
                             message: format!("Tool not found: {}", call_params.name),

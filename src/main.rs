@@ -3,6 +3,7 @@ use tracing::Level;
 use tracing_subscriber::FmtSubscriber;
 use std::io::stderr;
 
+mod ast;
 mod protocol;
 mod server;
 mod tools;
