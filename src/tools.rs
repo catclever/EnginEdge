@@ -373,6 +373,7 @@ pub fn execute_get_status() -> Result<CallToolResult, JsonRpcError> {
 }
 
 #[cfg(test)]
+#[allow(irrefutable_let_patterns)]
 mod tests {
     use super::*;
 
@@ -381,11 +382,8 @@ mod tests {
         let args = json!({"message": "hello world"});
         let result = execute_echo(Some(args)).unwrap();
         assert_eq!(result.content.len(), 1);
-        if let Content::Text { text } = &result.content[0] {
-            assert_eq!(text, "hello world");
-        } else {
-            panic!("Expected text content");
-        }
+        let Content::Text { text } = &result.content[0] else { panic!("Expected text content"); };
+        assert_eq!(text, "hello world");
     }
 
     #[test]
@@ -399,24 +397,18 @@ mod tests {
     #[test]
     fn test_ping_execution() {
         let result = execute_ping().unwrap();
-        if let Content::Text { text } = &result.content[0] {
-            assert!(text.starts_with("pong: "));
-        } else {
-            panic!("Expected text content");
-        }
+        let Content::Text { text } = &result.content[0] else { panic!("Expected text content"); };
+        assert!(text.starts_with("pong: "));
     }
 
     #[test]
     fn test_get_status_execution() {
         let result = execute_get_status().unwrap();
-        if let Content::Text { text } = &result.content[0] {
-            let parsed: Value = serde_json::from_str(text).unwrap();
-            assert_eq!(parsed.get("status").unwrap().as_str().unwrap(), "running");
-            assert!(parsed.get("version").is_some());
-            assert!(parsed.get("current_directory").is_some());
-        } else {
-            panic!("Expected text content");
-        }
+        let Content::Text { text } = &result.content[0] else { panic!("Expected text content"); };
+        let parsed: Value = serde_json::from_str(text).unwrap();
+        assert_eq!(parsed.get("status").unwrap().as_str().unwrap(), "running");
+        assert!(parsed.get("version").is_some());
+        assert!(parsed.get("current_directory").is_some());
     }
 
     #[tokio::test]

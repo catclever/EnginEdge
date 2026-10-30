@@ -168,7 +168,8 @@ fn send_custom_error(id: Id, error: JsonRpcError) {
 }
 
 fn send_out<T: serde::Serialize>(msg: T) {
-    let out = serde_json::to_string(&msg).unwrap();
+    let raw_out = serde_json::to_string(&msg).unwrap();
+    let out = crate::security::redact_secrets(&raw_out);
     debug!("Sending: {}", out);
     // CRITICAL: stdout must ONLY contain valid protocol lines.
     let mut stdout = io::stdout();

@@ -54,6 +54,7 @@ pub struct JsonRpcError {
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
 pub struct InitializeParams {
     pub protocol_version: String,
     pub client_info: Implementation,
