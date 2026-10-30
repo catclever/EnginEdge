@@ -3,6 +3,161 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use std::env;
 
 use crate::protocol::*;
+use crate::ast;
+
+pub fn get_outline_tool_def() -> Tool {
+    Tool {
+        name: "get_outline".to_string(),
+        description: Some("Extracts high-level symbols (functions, structs, etc) from a file".to_string()),
+        input_schema: json!({
+            "type": "object",
+            "properties": {
+                "file_path": {
+                    "type": "string"
+                }
+            },
+            "required": ["file_path"]
+        }),
+    }
+}
+
+pub fn execute_get_outline(args: Option<Value>) -> Result<CallToolResult, JsonRpcError> {
+    if let Some(args_obj) = args {
+        if let Some(file_path) = args_obj.get("file_path").and_then(|m| m.as_str()) {
+            match ast::get_outline(file_path) {
+                Ok(outline) => {
+                    return Ok(CallToolResult {
+                        content: vec![Content::Text {
+                            text: outline.to_string(),
+                        }],
+                        is_error: None,
+                    });
+                }
+                Err(e) => {
+                    return Err(JsonRpcError {
+                        code: -32603,
+                        message: format!("Failed to get outline: {}", e),
+                        data: None,
+                    });
+                }
+            }
+        }
+    }
+
+    Err(JsonRpcError {
+        code: -32602,
+        message: "Missing required argument 'file_path'".to_string(),
+        data: None,
+    })
+}
+
+pub fn read_symbol_tool_def() -> Tool {
+    Tool {
+        name: "read_symbol".to_string(),
+        description: Some("Extracts the exact code block for a specific target symbol".to_string()),
+        input_schema: json!({
+            "type": "object",
+            "properties": {
+                "file_path": {
+                    "type": "string"
+                },
+                "symbol_path": {
+                    "type": "string"
+                }
+            },
+            "required": ["file_path", "symbol_path"]
+        }),
+    }
+}
+
+pub fn execute_read_symbol(args: Option<Value>) -> Result<CallToolResult, JsonRpcError> {
+    if let Some(args_obj) = args {
+        let file_path = args_obj.get("file_path").and_then(|m| m.as_str());
+        let symbol_path = args_obj.get("symbol_path").and_then(|m| m.as_str());
+
+        if let (Some(fp), Some(sp)) = (file_path, symbol_path) {
+            match ast::read_symbol(fp, sp) {
+                Ok(symbol) => {
+                    return Ok(CallToolResult {
+                        content: vec![Content::Text {
+                            text: symbol.to_string(),
+                        }],
+                        is_error: None,
+                    });
+                }
+                Err(e) => {
+                    return Err(JsonRpcError {
+                        code: -32603,
+                        message: format!("Failed to read symbol: {}", e),
+                        data: None,
+                    });
+                }
+            }
+        }
+    }
+
+    Err(JsonRpcError {
+        code: -32602,
+        message: "Missing required arguments 'file_path' and 'symbol_path'".to_string(),
+        data: None,
+    })
+}
+
+pub fn replace_symbol_tool_def() -> Tool {
+    Tool {
+        name: "replace_symbol".to_string(),
+        description: Some("Atomically replaces the target AST node's span with new_code".to_string()),
+        input_schema: json!({
+            "type": "object",
+            "properties": {
+                "file_path": {
+                    "type": "string"
+                },
+                "symbol_path": {
+                    "type": "string"
+                },
+                "new_code": {
+                    "type": "string"
+                }
+            },
+            "required": ["file_path", "symbol_path", "new_code"]
+        }),
+    }
+}
+
+pub fn execute_replace_symbol(args: Option<Value>) -> Result<CallToolResult, JsonRpcError> {
+    if let Some(args_obj) = args {
+        let file_path = args_obj.get("file_path").and_then(|m| m.as_str());
+        let symbol_path = args_obj.get("symbol_path").and_then(|m| m.as_str());
+        let new_code = args_obj.get("new_code").and_then(|m| m.as_str());
+
+        if let (Some(fp), Some(sp), Some(nc)) = (file_path, symbol_path, new_code) {
+            match ast::replace_symbol(fp, sp, nc) {
+                Ok(result) => {
+                    return Ok(CallToolResult {
+                        content: vec![Content::Text {
+                            text: result.to_string(),
+                        }],
+                        is_error: None,
+                    });
+                }
+                Err(e) => {
+                    return Err(JsonRpcError {
+                        code: -32603,
+                        message: format!("Failed to replace symbol: {}", e),
+                        data: None,
+                    });
+                }
+            }
+        }
+    }
+
+    Err(JsonRpcError {
+        code: -32602,
+        message: "Missing required arguments 'file_path', 'symbol_path', 'new_code'".to_string(),
+        data: None,
+    })
+}
 
 pub fn ping_tool_def() -> Tool {
     Tool {
