@@ -1,0 +1,24 @@
+# Generated automatically by setup-mutagen skill
+sync:
+  defaults:
+    mode: "two-way-resolved"
+    ignore:
+      vcs: true
+      paths:
+        - ".DS_Store"
+        - ".idea/"
+        - ".vscode/"
+        - ".agent/"
+        - ".gemini/"
+        - ".codex/"
+        - "*.log"
+        - "tmp/"
+        - "temp/"
+        # Rust build ignores
+        - "target/"
+    symlink:
+      mode: "posix-raw"
+
+  EnginEdge:
+    alpha: "."
+    beta: "Antigravity:/root/Projects/EnginEdge"
