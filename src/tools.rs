@@ -4,6 +4,7 @@ use std::env;
 
 use crate::protocol::*;
 use crate::ast;
+use crate::bridge::CloudBridge;
 
 pub fn get_outline_tool_def() -> Tool {
     Tool {
@@ -184,6 +185,127 @@ pub fn execute_ping() -> Result<CallToolResult, JsonRpcError> {
     })
 }
 
+// Cloud Intelligence Tools
+
+pub fn survey_architecture_tool_def() -> Tool {
+    Tool {
+        name: "survey_architecture".to_string(),
+        description: Some("Discovers open-source repo blueprints".to_string()),
+        input_schema: json!({
+            "type": "object",
+            "properties": {
+                "query": { "type": "string" },
+                "topic": { "type": "string" }
+            },
+            "required": ["query"]
+        }),
+    }
+}
+
+pub async fn execute_survey_architecture(_args: Option<Value>, bridge: &CloudBridge) -> Result<CallToolResult, JsonRpcError> {
+    if !bridge.is_connected().await {
+        return Err(JsonRpcError {
+            code: -32000,
+            message: "Cloud bridge is disconnected".to_string(),
+            data: None,
+        });
+    }
+
+    Ok(CallToolResult {
+        content: vec![Content::Text { text: "Simulated architecture survey result".to_string() }],
+        is_error: None,
+    })
+}
+
+pub fn search_code_examples_tool_def() -> Tool {
+    Tool {
+        name: "search_code_examples".to_string(),
+        description: Some("Retrieves real-world production code snippets".to_string()),
+        input_schema: json!({
+            "type": "object",
+            "properties": {
+                "query": { "type": "string" },
+                "lang": { "type": "string" }
+            },
+            "required": ["query"]
+        }),
+    }
+}
+
+pub async fn execute_search_code_examples(_args: Option<Value>, bridge: &CloudBridge) -> Result<CallToolResult, JsonRpcError> {
+    if !bridge.is_connected().await {
+        return Err(JsonRpcError {
+            code: -32000,
+            message: "Cloud bridge is disconnected".to_string(),
+            data: None,
+        });
+    }
+
+    Ok(CallToolResult {
+        content: vec![Content::Text { text: "Simulated code examples result".to_string() }],
+        is_error: None,
+    })
+}
+
+pub fn fetch_doc_tool_def() -> Tool {
+    Tool {
+        name: "fetch_doc".to_string(),
+        description: Some("Pulls sanitized Markdown documentation".to_string()),
+        input_schema: json!({
+            "type": "object",
+            "properties": {
+                "package_or_url": { "type": "string" }
+            },
+            "required": ["package_or_url"]
+        }),
+    }
+}
+
+pub async fn execute_fetch_doc(_args: Option<Value>, bridge: &CloudBridge) -> Result<CallToolResult, JsonRpcError> {
+    if !bridge.is_connected().await {
+        return Err(JsonRpcError {
+            code: -32000,
+            message: "Cloud bridge is disconnected".to_string(),
+            data: None,
+        });
+    }
+
+    Ok(CallToolResult {
+        content: vec![Content::Text { text: "Simulated documentation result".to_string() }],
+        is_error: None,
+    })
+}
+
+pub fn inspect_spec_tool_def() -> Tool {
+    Tool {
+        name: "inspect_spec".to_string(),
+        description: Some("Retrieves test specs as executable living documentation".to_string()),
+        input_schema: json!({
+            "type": "object",
+            "properties": {
+                "repo": { "type": "string" },
+                "symbol": { "type": "string" }
+            },
+            "required": ["repo"]
+        }),
+    }
+}
+
+pub async fn execute_inspect_spec(_args: Option<Value>, bridge: &CloudBridge) -> Result<CallToolResult, JsonRpcError> {
+    if !bridge.is_connected().await {
+        return Err(JsonRpcError {
+            code: -32000,
+            message: "Cloud bridge is disconnected".to_string(),
+            data: None,
+        });
+    }
+
+    Ok(CallToolResult {
+        content: vec![Content::Text { text: "Simulated test spec result".to_string() }],
+        is_error: None,
+    })
+}
+
 pub fn echo_tool_def() -> Tool {
     Tool {
         name: "echo".to_string(),
@@ -295,5 +417,32 @@ mod tests {
         } else {
             panic!("Expected text content");
         }
+    }
+
+    #[tokio::test]
+    async fn test_cloud_tools_offline_fallback() {
+        let bridge = CloudBridge::new(None); // no URL, won't connect
+
+        // Check survey_architecture offline fallback
+        let survey_res = execute_survey_architecture(Some(json!({"query": "test"})), &bridge).await;
+        assert!(survey_res.is_err());
+        let err = survey_res.unwrap_err();
+        assert_eq!(err.code, -32000);
+        assert_eq!(err.message, "Cloud bridge is disconnected");
+
+        // Check search_code_examples offline fallback
+        let search_res = execute_search_code_examples(Some(json!({"query": "test", "lang": "rust"})), &bridge).await;
+        assert!(search_res.is_err());
+        assert_eq!(search_res.unwrap_err().code, -32000);
+
+        // Check fetch_doc offline fallback
+        let fetch_res = execute_fetch_doc(Some(json!({"package_or_url": "test"})), &bridge).await;
+        assert!(fetch_res.is_err());
+        assert_eq!(fetch_res.unwrap_err().code, -32000);
+
+        // Check inspect_spec offline fallback
+        let inspect_res = execute_inspect_spec(Some(json!({"repo": "test"})), &bridge).await;
+        assert!(inspect_res.is_err());
+        assert_eq!(inspect_res.unwrap_err().code, -32000);
     }
 }
