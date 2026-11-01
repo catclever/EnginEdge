@@ -2,6 +2,8 @@ use clap::{Parser, Subcommand};
 use tracing::Level;
 use tracing_subscriber::FmtSubscriber;
 use std::io::stderr;
+use std::time::Duration;
+use serde_json::json;
 
 mod ast;
 mod bridge;
@@ -9,6 +11,8 @@ mod protocol;
 mod server;
 mod tools;
 mod security;
+
+const DEFAULT_HUB_URL: &str = "wss://dalembert-production.up.railway.app";
 
 #[derive(Parser)]
 #[command(name = "enginedge")]
@@ -27,28 +31,43 @@ struct Cli {
 enum Commands {
     /// Start the MCP stdio server (default)
     Mcp,
+    /// Run headless autonomous coding agent
+    Run {
+        /// Task prompt / description for autonomous coding
+        #[arg(long, short)]
+        task: String,
+
+        /// Custom system prompt override
+        #[arg(long)]
+        system_prompt: Option<String>,
+
+        /// LLM profile name on cloud hub
+        #[arg(long)]
+        profile: Option<String>,
+    },
 }
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    let cli = Cli::parse();
+
+    let is_headless = matches!(cli.command, Some(Commands::Run { .. }));
+
     // CRITICAL HYGIENE RULE: Configure tracing to write EXCLUSIVELY to stderr.
-    // stdout MUST only contain valid JSON-RPC 2.0 protocol lines.
+    // stdout MUST only contain valid JSON-RPC 2.0 protocol lines in MCP mode.
+    let log_level = if is_headless { Level::INFO } else { Level::DEBUG };
     let subscriber = FmtSubscriber::builder()
-        .with_max_level(Level::DEBUG)
+        .with_max_level(log_level)
         .with_writer(stderr)
         .finish();
 
     tracing::subscriber::set_global_default(subscriber)
         .expect("setting default subscriber failed");
 
-    let cli = Cli::parse();
-
-    let mut hub_url = cli.hub_url;
-    if hub_url.is_none() {
-        hub_url = std::env::var("DESCARTES_WS_URL")
-            .or_else(|_| std::env::var("ENGINEDGE_HUB_URL"))
-            .ok();
-    }
+    let hub_url = cli.hub_url
+        .or_else(|| std::env::var("DESCARTES_WS_URL").ok())
+        .or_else(|| std::env::var("ENGINEDGE_HUB_URL").ok())
+        .or_else(|| Some(DEFAULT_HUB_URL.to_string()));
 
     let bridge = bridge::CloudBridge::new(hub_url);
     bridge.start();
@@ -57,6 +76,81 @@ async fn main() -> anyhow::Result<()> {
         Some(Commands::Mcp) | None => {
             tracing::info!("Starting EnginEdge MCP stdio server...");
             server::run_stdio_server(bridge).await?;
+        }
+        Some(Commands::Run { task, system_prompt, profile }) => {
+            run_headless_agent(bridge, task, system_prompt, profile).await?;
+        }
+    }
+
+    Ok(())
+}
+
+async fn run_headless_agent(
+    bridge: bridge::CloudBridge,
+    task: String,
+    system_prompt: Option<String>,
+    profile: Option<String>,
+) -> anyhow::Result<()> {
+    eprintln!("🚀 [EnginEdge] Initializing headless autonomous agent...");
+    eprintln!("📡 [EnginEdge] Connecting to Cloud Bridge at Railway...");
+
+    if !bridge.wait_for_connection(Duration::from_secs(15)).await {
+        anyhow::bail!("Failed to connect to Cloud Bridge within 15 seconds. Please verify network or hub status.");
+    }
+    eprintln!("✅ [EnginEdge] Connected to Cloud Bridge!");
+
+    let default_system_prompt = "You are EnginEdge Autonomous Agent, an ultra-fast edge coding assistant. \
+        You have local workspace tools (list_files, grep_search, write_file, run_verification, ast outline/read/replace) \
+        and cloud intelligence tools (survey_architecture, search_code_examples, fetch_doc, inspect_spec, knowledge_store). \
+        Inspect the codebase, think step-by-step, make necessary edits, verify your work using tests or builds, and report final results.".to_string();
+
+    let init_payload = json!({
+        "type": "init",
+        "task_name": "enginedge_headless_task",
+        "prompt": task,
+        "system_prompt": system_prompt.unwrap_or(default_system_prompt),
+        "llm_profile": profile.unwrap_or_else(|| "default".to_string()),
+        "tools": tools::all_local_tool_schemas(),
+    });
+
+    let mut event_rx = bridge.subscribe_events();
+    bridge.send_raw(init_payload.to_string()).await
+        .map_err(|e| anyhow::anyhow!("Failed to send init payload: {}", e))?;
+
+    eprintln!("✨ [EnginEdge] Task dispatched. Awaiting agent execution events...\n");
+
+    while let Ok(event) = event_rx.recv().await {
+        match event {
+            bridge::BridgeEvent::StreamEvent { event, data } => {
+                match event.as_str() {
+                    "thought" => {
+                        let text = data.as_str().unwrap_or("");
+                        eprintln!("💭 [Thought] {}", text);
+                    }
+                    "tool_call_start" => {
+                        eprintln!("🛠️ [Tool Call] {}", data);
+                    }
+                    "tool_call_end" => {
+                        eprintln!("✔️ [Tool Result] {}", data);
+                    }
+                    _ => {
+                        eprintln!("ℹ️ [Event] {} : {}", event, data);
+                    }
+                }
+            }
+            bridge::BridgeEvent::Finished { result, status } => {
+                eprintln!("\n🏁 [EnginEdge] Task completed with status: {}", status);
+                if let Some(res_str) = result.as_str() {
+                    println!("{}", res_str);
+                } else {
+                    println!("{}", serde_json::to_string_pretty(&result)?);
+                }
+                return Ok(());
+            }
+            bridge::BridgeEvent::Error { message } => {
+                eprintln!("\n❌ [EnginEdge] Cloud Agent error: {}", message);
+                anyhow::bail!("Agent execution failed: {}", message);
+            }
         }
     }
 

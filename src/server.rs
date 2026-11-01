@@ -72,18 +72,7 @@ async fn handle_request(req: JsonRpcRequest, bridge: &CloudBridge) {
         }
         "tools/list" => {
             let result = ToolListResult {
-                tools: vec![
-                    tools::ping_tool_def(),
-                    tools::echo_tool_def(),
-                    tools::get_status_tool_def(),
-                    tools::get_outline_tool_def(),
-                    tools::read_symbol_tool_def(),
-                    tools::replace_symbol_tool_def(),
-                    tools::survey_architecture_tool_def(),
-                    tools::search_code_examples_tool_def(),
-                    tools::fetch_doc_tool_def(),
-                    tools::inspect_spec_tool_def(),
-                ],
+                tools: tools::all_mcp_tools(),
             };
             send_response(req.id, json!(result));
         }
@@ -97,6 +86,10 @@ async fn handle_request(req: JsonRpcRequest, bridge: &CloudBridge) {
                         "get_outline" => tools::execute_get_outline(call_params.arguments),
                         "read_symbol" => tools::execute_read_symbol(call_params.arguments),
                         "replace_symbol" => tools::execute_replace_symbol(call_params.arguments),
+                        "list_files" => tools::execute_list_files(call_params.arguments),
+                        "grep_search" => tools::execute_grep_search(call_params.arguments),
+                        "write_file" => tools::execute_write_file(call_params.arguments),
+                        "run_verification" => tools::execute_run_verification(call_params.arguments),
                         "survey_architecture" => tools::execute_survey_architecture(call_params.arguments, bridge).await,
                         "search_code_examples" => tools::execute_search_code_examples(call_params.arguments, bridge).await,
                         "fetch_doc" => tools::execute_fetch_doc(call_params.arguments, bridge).await,
