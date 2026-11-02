@@ -570,9 +570,12 @@ fn grade_task(verify_command: &str, working_dir: &Path) -> (bool, String, String
     }
 
     let program = tokens[0];
-    let args = &tokens[1..];
+    let cleaned_args: Vec<String> = tokens[1..]
+        .iter()
+        .map(|t| t.trim_matches('\'').trim_matches('"').to_string())
+        .collect();
 
-    match std::process::Command::new(program).current_dir(working_dir).args(args).output() {
+    match std::process::Command::new(program).current_dir(working_dir).args(&cleaned_args).output() {
         Ok(output) => {
             let passed = output.status.success();
             let stdout = String::from_utf8_lossy(&output.stdout).to_string();

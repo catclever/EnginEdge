@@ -55,7 +55,7 @@ def parse_exercise(lang: str, ex_dir: Path) -> dict:
     elif lang == "go":
         verify_command = "go test -v ."
     elif lang == "python":
-        verify_command = "python3 -m unittest discover -s . -p \"*_test.py\""
+        verify_command = "python3 -m unittest discover -s . -p *_test.py"
     elif lang == "javascript":
         verify_command = "node test.js"
 
