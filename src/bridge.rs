@@ -151,7 +151,7 @@ impl CloudBridge {
                             let mut pairs: Vec<(String, String)> = url.query_pairs().map(|(k, v)| (k.into_owned(), v.into_owned())).collect();
                             if !pairs.iter().any(|(k, _)| k == "token") {
                                 pairs.push(("token".to_string(), token.to_string()));
-                                url.query_pairs_mut().clear().extend_pairs(pairs.into_iter());
+                                url.query_pairs_mut().clear().extend_pairs(pairs);
                             }
                         }
                     }

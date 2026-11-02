@@ -69,8 +69,8 @@ fn find_symbol_node<'a>(
     let tail_name = symbol_path
         .split("::")
         .last()
-        .and_then(|s| s.split('#').last())
-        .and_then(|s| s.split('.').last())
+        .and_then(|s| s.split('#').next_back())
+        .and_then(|s| s.split('.').next_back())
         .unwrap_or(symbol_path);
 
     let mut fallback_node = None;

@@ -11,6 +11,7 @@ mod protocol;
 mod server;
 mod tools;
 mod security;
+pub mod policy;
 
 const DEFAULT_HUB_URL: &str = "wss://dalembert-production.up.railway.app";
 
@@ -25,6 +26,14 @@ struct Cli {
     /// URL of the Descartes/Dalembert Cloud Bridge
     #[arg(long, env = "DESCARTES_WS_URL", alias = "ENGINEDGE_HUB_URL")]
     hub_url: Option<String>,
+
+    /// Security policy mode: 'dev' (default, max weight 40) or 'eval' (benchmark, max weight 75)
+    #[arg(long, env = "ENGINEDGE_MODE", default_value = "dev")]
+    mode: String,
+
+    /// Custom max risk weight threshold (0-99). Overrides mode default.
+    #[arg(long, env = "ENGINEDGE_MAX_WEIGHT")]
+    max_weight: Option<u32>,
 }
 
 #[derive(Subcommand)]
@@ -50,6 +59,9 @@ enum Commands {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
+
+    // Initialize execution security policy (dev mode default weight 40, eval mode weight 75)
+    policy::init_policy(&cli.mode, cli.max_weight);
 
     let is_headless = matches!(cli.command, Some(Commands::Run { .. }));
 

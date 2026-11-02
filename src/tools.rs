@@ -255,11 +255,9 @@ fn collect_files_recursive(
 
         if path.is_dir() {
             collect_files_recursive(&path, root, depth + 1, max_depth, files)?;
-        } else if path.is_file() {
-            if crate::security::validate_path(&path).is_ok() {
-                if let Ok(rel) = path.strip_prefix(root) {
-                    files.push(rel.to_string_lossy().to_string());
-                }
+        } else if path.is_file() && crate::security::validate_path(&path).is_ok() {
+            if let Ok(rel) = path.strip_prefix(root) {
+                files.push(rel.to_string_lossy().to_string());
             }
         }
     }
@@ -557,15 +555,19 @@ pub fn execute_write_file(args: Option<Value>) -> Result<CallToolResult, JsonRpc
 }
 
 pub fn run_verification_tool_def() -> Tool {
+    let summary = crate::policy::get_policy_summary();
     Tool {
         name: "run_verification".to_string(),
-        description: Some("Executes whitelisted test and build verification commands (e.g. cargo test, cargo check, npm test, pytest, bundle exec rspec)".to_string()),
+        description: Some(format!(
+            "Executes test and build verification commands evaluated by security policy. Policy: [{}]",
+            summary
+        )),
         input_schema: json!({
             "type": "object",
             "properties": {
                 "command": {
                     "type": "string",
-                    "description": "Whitelisted verification command to execute"
+                    "description": "Verification command or safe '&&' chain evaluated by security policy engine"
                 }
             },
             "required": ["command"]
@@ -589,71 +591,77 @@ pub fn execute_run_verification(args: Option<Value>) -> Result<CallToolResult, J
             data: None,
         })?;
 
-    for forbidden in ["&", "|", ";", ">", "<", "`", "$", "\n"] {
-        if cmd_str.contains(forbidden) {
+    let (assigned_weight, sub_commands) = match crate::policy::evaluate_command(cmd_str) {
+        crate::policy::PolicyCheckResult::Allowed { weight, sub_commands } => (weight, sub_commands),
+        crate::policy::PolicyCheckResult::Denied { weight, reason } => {
             return Err(JsonRpcError {
                 code: -32602,
-                message: format!("Security error: Disallowed character '{}' in verification command", forbidden),
-                data: None,
+                message: format!("Security policy rejected: {}", reason),
+                data: Some(json!({
+                    "command_weight": weight,
+                    "current_mode": crate::policy::get_current_mode().as_str(),
+                    "max_allowed_weight": crate::policy::get_max_weight(),
+                })),
             });
+        }
+    };
+
+    let mut all_stdout = String::new();
+    let mut all_stderr = String::new();
+    let mut overall_success = true;
+    let mut last_exit_code = 0;
+
+    for sub_cmd in &sub_commands {
+        let tokens: Vec<&str> = sub_cmd.split_whitespace().collect();
+        if tokens.is_empty() {
+            continue;
+        }
+
+        let program = tokens[0];
+        let output = std::process::Command::new(program)
+            .args(&tokens[1..])
+            .output()
+            .map_err(|e| JsonRpcError {
+                code: -32603,
+                message: format!("Failed to execute sub-command '{}': {}", sub_cmd, e),
+                data: None,
+            })?;
+
+        let exit_code = output.status.code().unwrap_or(-1);
+        let stdout_str = String::from_utf8_lossy(&output.stdout);
+        let stderr_str = String::from_utf8_lossy(&output.stderr);
+
+        if !all_stdout.is_empty() && !stdout_str.is_empty() {
+            all_stdout.push('\n');
+        }
+        all_stdout.push_str(&stdout_str);
+
+        if !all_stderr.is_empty() && !stderr_str.is_empty() {
+            all_stderr.push('\n');
+        }
+        all_stderr.push_str(&stderr_str);
+
+        last_exit_code = exit_code;
+        if !output.status.success() {
+            overall_success = false;
+            break; // Stop sequential chain on first failure
         }
     }
 
-    let tokens: Vec<&str> = cmd_str.split_whitespace().collect();
-    if tokens.is_empty() {
-        return Err(JsonRpcError {
-            code: -32602,
-            message: "Empty command".to_string(),
-            data: None,
-        });
-    }
-
-    let program = tokens[0];
-    let is_whitelisted = match program {
-        "cargo" => true,
-        "npm" | "pnpm" | "yarn" | "bun" => true,
-        "pytest" => true,
-        "python" | "python3" => tokens.get(1).map_or(false, |&a| a == "-m"),
-        "bundle" => tokens.get(1).map_or(false, |&a| a == "exec"),
-        "go" => tokens.get(1).map_or(false, |&a| a == "test" || a == "vet"),
-        "make" => tokens.get(1).map_or(false, |&a| a == "test" || a == "check"),
-        _ => false,
-    };
-
-    if !is_whitelisted {
-        return Err(JsonRpcError {
-            code: -32602,
-            message: format!("Security error: Program '{}' is not in verification whitelist", program),
-            data: None,
-        });
-    }
-
-    let output = std::process::Command::new(program)
-        .args(&tokens[1..])
-        .output()
-        .map_err(|e| JsonRpcError {
-            code: -32603,
-            message: format!("Failed to execute command: {}", e),
-            data: None,
-        })?;
-
-    let exit_code = output.status.code().unwrap_or(-1);
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-
     let result_json = json!({
         "command": cmd_str,
-        "exit_code": exit_code,
-        "success": output.status.success(),
-        "stdout": crate::security::redact_secrets(&stdout),
-        "stderr": crate::security::redact_secrets(&stderr),
+        "weight": assigned_weight,
+        "exit_code": last_exit_code,
+        "success": overall_success,
+        "stdout": crate::security::redact_secrets(&all_stdout),
+        "stderr": crate::security::redact_secrets(&all_stderr),
     });
 
     Ok(CallToolResult {
         content: vec![Content::Text {
             text: result_json.to_string(),
         }],
-        is_error: if output.status.success() { None } else { Some(true) },
+        is_error: if overall_success { None } else { Some(true) },
     })
 }
 
@@ -740,6 +748,11 @@ pub fn execute_get_status() -> Result<CallToolResult, JsonRpcError> {
         "status": "running",
         "version": version,
         "current_directory": current_dir,
+        "policy": {
+            "mode": crate::policy::get_current_mode().as_str(),
+            "max_weight": crate::policy::get_max_weight(),
+            "summary": crate::policy::get_policy_summary(),
+        }
     });
 
     Ok(CallToolResult {
@@ -1026,23 +1039,39 @@ mod tests {
 
     #[test]
     fn test_run_verification_whitelist() {
-        // Allowed command
+        // Dev mode: cargo check (weight 15) is allowed
+        crate::policy::init_policy("dev", None);
         let res = execute_run_verification(Some(json!({
             "command": "cargo check"
         }))).unwrap();
         assert_eq!(res.is_error, None);
 
-        // Disallowed command
+        // Dev mode: cmake (weight 60) is denied
+        let cmake_dev_res = execute_run_verification(Some(json!({
+            "command": "cmake -B build"
+        })));
+        assert!(cmake_dev_res.is_err());
+
+        // Eval mode: cmake (weight 60 <= 75) is allowed to be evaluated
+        crate::policy::init_policy("eval", None);
+
+        // Disallowed command (rm -rf / is weight 100)
         let bad_res = execute_run_verification(Some(json!({
             "command": "rm -rf /"
         })));
         assert!(bad_res.is_err());
 
-        // Disallowed chaining
+        // Disallowed chaining with dangerous commands
         let chain_res = execute_run_verification(Some(json!({
             "command": "cargo check && rm -rf /"
         })));
         assert!(chain_res.is_err());
+
+        // Disallowed shell metacharacters
+        let pipe_res = execute_run_verification(Some(json!({
+            "command": "cargo check | grep error"
+        })));
+        assert!(pipe_res.is_err());
     }
 
     #[tokio::test]
