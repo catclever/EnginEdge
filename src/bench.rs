@@ -68,6 +68,7 @@ pub struct BenchOptions {
     pub limit: Option<usize>,
     pub output_path: String,
     pub log_dir: String,
+    pub hub_url: Option<String>,
     pub profile: Option<String>,
     pub dry_run: bool,
     pub timeout_secs: u64,
@@ -365,7 +366,7 @@ fn load_tasks_from_file(file: &Path) -> Vec<BenchTask> {
     }
 }
 
-pub async fn run_benchmark(bridge: Option<CloudBridge>, options: BenchOptions) -> anyhow::Result<BenchReport> {
+pub async fn run_benchmark(options: BenchOptions) -> anyhow::Result<BenchReport> {
     // Switch to Eval mode for benchmark execution
     policy::init_policy("eval", None);
 
@@ -432,9 +433,10 @@ pub async fn run_benchmark(bridge: Option<CloudBridge>, options: BenchOptions) -
         trace_log.push_str("=======================================================\n\n");
 
         if !options.dry_run {
-            if let Some(ref b) = bridge {
-                if b.wait_for_connection(Duration::from_secs(15)).await {
-                    let mut event_rx = b.subscribe_events();
+            let b = CloudBridge::new(options.hub_url.clone());
+            b.start();
+            if b.wait_for_connection(Duration::from_secs(15)).await {
+                let mut event_rx = b.subscribe_events();
 
                     let init_payload = json!({
                         "type": "init",
@@ -502,11 +504,6 @@ pub async fn run_benchmark(bridge: Option<CloudBridge>, options: BenchOptions) -
                     eprintln!("❌ [Bridge] Failed to connect to Cloud Bridge within 15s");
                     error_msg = Some(err_str);
                 }
-            } else {
-                let err_str = "No cloud bridge provided in non-dry-run mode".to_string();
-                trace_log.push_str(&format!("[FATAL ERROR] {}\n", err_str));
-                error_msg = Some(err_str);
-            }
         } else {
             trace_log.push_str("[DRY RUN] Cloud LLM inference skipped.\n");
         }
@@ -824,12 +821,13 @@ mod tests {
             limit: Some(1),
             output_path: "target/test_dry_run_report.md".to_string(),
             log_dir: "target/test_bench_logs".to_string(),
+            hub_url: None,
             profile: None,
             dry_run: true,
             timeout_secs: 5,
         };
 
-        let report = run_benchmark(None, options).await.unwrap();
+        let report = run_benchmark(options).await.unwrap();
         assert_eq!(report.total_tasks, 1);
         // In dry run without code implementation, the test should fail
         assert_eq!(report.passed_tasks, 0);

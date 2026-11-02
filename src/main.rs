@@ -140,7 +140,7 @@ async fn main() -> anyhow::Result<()> {
         .or_else(|| std::env::var("ENGINEDGE_HUB_URL").ok())
         .or_else(|| Some(DEFAULT_HUB_URL.to_string()));
 
-    let bridge = bridge::CloudBridge::new(hub_url);
+    let bridge = bridge::CloudBridge::new(hub_url.clone());
     bridge.start();
 
     match cli.command {
@@ -202,12 +202,13 @@ async fn main() -> anyhow::Result<()> {
                 limit,
                 output_path: output,
                 log_dir,
+                hub_url,
                 profile,
                 dry_run,
                 timeout_secs: timeout,
             };
 
-            bench::run_benchmark(Some(bridge), options).await?;
+            bench::run_benchmark(options).await?;
         }
     }
 
