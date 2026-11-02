@@ -143,7 +143,19 @@ impl CloudBridge {
     ) {
         loop {
             match Url::parse(&url_str) {
-                Ok(url) => {
+                Ok(mut url) => {
+                    // Check and inject HUB_AUTH_TOKEN / DESCARTES_AUTH_TOKEN if available
+                    if let Ok(token) = std::env::var("HUB_AUTH_TOKEN").or_else(|_| std::env::var("DESCARTES_AUTH_TOKEN")) {
+                        let token = token.trim();
+                        if !token.is_empty() {
+                            let mut pairs: Vec<(String, String)> = url.query_pairs().map(|(k, v)| (k.into_owned(), v.into_owned())).collect();
+                            if !pairs.iter().any(|(k, _)| k == "token") {
+                                pairs.push(("token".to_string(), token.to_string()));
+                                url.query_pairs_mut().clear().extend_pairs(pairs.into_iter());
+                            }
+                        }
+                    }
+
                     info!("Attempting to connect to Cloud Bridge at {}", url);
                     match connect_async(url.as_str()).await {
                         Ok((ws_stream, _)) => {
@@ -242,6 +254,11 @@ impl CloudBridge {
                             for (_, sender) in pending.drain() {
                                 let _ = sender.send("Error: Cloud Bridge disconnected".to_string());
                             }
+
+                            // CRITICAL: Notify subscribers (e.g. main.rs headless runner) to prevent deadlock
+                            let _ = event_tx.send(BridgeEvent::Error {
+                                message: "Disconnected from Cloud Bridge".to_string(),
+                            });
                         }
                         Err(e) => {
                             error!("Failed to connect to Cloud Bridge: {}", e);

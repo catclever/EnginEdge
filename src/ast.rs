@@ -65,11 +65,24 @@ fn find_symbol_node<'a>(
 ) -> Option<Node<'a>> {
     let mut nodes_to_visit = vec![node];
 
+    // Extract tail name if path contains ::, #, or . (e.g. CloudBridge::new or Session#handle_init)
+    let tail_name = symbol_path
+        .split("::")
+        .last()
+        .and_then(|s| s.split('#').last())
+        .and_then(|s| s.split('.').last())
+        .unwrap_or(symbol_path);
+
+    let mut fallback_node = None;
+
     while let Some(current) = nodes_to_visit.pop() {
         if is_outline_node(current.kind()) {
             if let Some(name) = extract_name(current, source_code) {
                 if name == symbol_path {
                     return Some(current);
+                }
+                if name == tail_name && fallback_node.is_none() {
+                    fallback_node = Some(current);
                 }
             }
         }
@@ -79,7 +92,7 @@ fn find_symbol_node<'a>(
             }
         }
     }
-    None
+    fallback_node
 }
 
 pub fn read_symbol(file_path: &str, symbol_path: &str) -> Result<Value> {
@@ -259,6 +272,10 @@ mod tests {
         let read_code = result.get("code").unwrap().as_str().unwrap();
 
         assert_eq!(read_code, "fn add(a: i32, b: i32) -> i32 { a + b }");
+
+        // Test path tolerance (e.g. MyStruct::add)
+        let result_path = read_symbol(file_path.to_str().unwrap(), "MyStruct::add").unwrap();
+        assert_eq!(result_path.get("code").unwrap().as_str().unwrap(), "fn add(a: i32, b: i32) -> i32 { a + b }");
 
         let result_err = read_symbol(file_path.to_str().unwrap(), "non_existent");
         assert!(result_err.is_err());

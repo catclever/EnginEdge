@@ -1,6 +1,7 @@
 use serde_json::{json, Value};
 use std::time::{SystemTime, UNIX_EPOCH};
 use std::env;
+use std::fs;
 
 use crate::protocol::*;
 use crate::ast;
@@ -375,6 +376,112 @@ fn search_file(
             }
         }
     }
+}
+
+pub fn read_file_tool_def() -> Tool {
+    Tool {
+        name: "read_file".to_string(),
+        description: Some("Reads full or partial content of a file within the workspace (text files, config files, Markdown, source code, etc.).".to_string()),
+        input_schema: json!({
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "description": "Relative file path within workspace"
+                },
+                "file_path": {
+                    "type": "string",
+                    "description": "Alias for path"
+                },
+                "start_line": {
+                    "type": "integer",
+                    "description": "Optional 1-based start line number (inclusive)"
+                },
+                "end_line": {
+                    "type": "integer",
+                    "description": "Optional 1-based end line number (inclusive)"
+                }
+            },
+            "required": ["path"]
+        }),
+    }
+}
+
+pub fn execute_read_file(args: Option<Value>) -> Result<CallToolResult, JsonRpcError> {
+    let args_obj = args.ok_or_else(|| JsonRpcError {
+        code: -32602,
+        message: "Missing arguments".to_string(),
+        data: None,
+    })?;
+
+    let path_str = args_obj.get("path")
+        .or_else(|| args_obj.get("file_path"))
+        .and_then(|p| p.as_str())
+        .ok_or_else(|| JsonRpcError {
+            code: -32602,
+            message: "Missing required argument 'path' (or 'file_path')".to_string(),
+            data: None,
+        })?;
+
+    let validated = crate::security::validate_path(path_str).map_err(|e| JsonRpcError {
+        code: -32602,
+        message: format!("Security error: {}", e),
+        data: None,
+    })?;
+
+    if !validated.exists() {
+        return Err(JsonRpcError {
+            code: -32602,
+            message: format!("File not found: {}", path_str),
+            data: None,
+        });
+    }
+
+    if !validated.is_file() {
+        return Err(JsonRpcError {
+            code: -32602,
+            message: format!("Target is not a file: {}", path_str),
+            data: None,
+        });
+    }
+
+    let file_content = fs::read_to_string(&validated).map_err(|e| JsonRpcError {
+        code: -32603,
+        message: format!("Failed to read file: {}", e),
+        data: None,
+    })?;
+
+    let lines: Vec<&str> = file_content.lines().collect();
+    let total_lines = lines.len();
+
+    let start_line = args_obj.get("start_line").and_then(|v| v.as_u64()).map(|v| v as usize).unwrap_or(1);
+    let end_line = args_obj.get("end_line").and_then(|v| v.as_u64()).map(|v| v as usize).unwrap_or(total_lines);
+
+    let effective_start = if start_line == 0 { 1 } else { start_line.min(total_lines.max(1)) };
+    let effective_end = end_line.min(total_lines).max(effective_start.saturating_sub(1));
+
+    let sliced_content = if total_lines == 0 || effective_start > total_lines {
+        String::new()
+    } else {
+        lines[effective_start - 1..effective_end].join("\n")
+    };
+
+    let redacted_content = crate::security::redact_secrets(&sliced_content);
+
+    let result_json = json!({
+        "path": path_str,
+        "total_lines": total_lines,
+        "start_line": effective_start,
+        "end_line": effective_end,
+        "content": redacted_content
+    });
+
+    Ok(CallToolResult {
+        content: vec![Content::Text {
+            text: result_json.to_string(),
+        }],
+        is_error: None,
+    })
 }
 
 pub fn write_file_tool_def() -> Tool {
@@ -752,6 +859,7 @@ pub async fn execute_local_tool_by_name(name: &str, args: Value) -> String {
         "get_outline" => execute_get_outline(args_opt),
         "read_symbol" => execute_read_symbol(args_opt),
         "replace_symbol" => execute_replace_symbol(args_opt),
+        "read_file" => execute_read_file(args_opt),
         "list_files" => execute_list_files(args_opt),
         "grep_search" => execute_grep_search(args_opt),
         "write_file" => execute_write_file(args_opt),
@@ -783,6 +891,7 @@ pub fn all_local_tool_schemas() -> Vec<Value> {
         get_outline_tool_def(),
         read_symbol_tool_def(),
         replace_symbol_tool_def(),
+        read_file_tool_def(),
         list_files_tool_def(),
         grep_search_tool_def(),
         write_file_tool_def(),
@@ -792,7 +901,14 @@ pub fn all_local_tool_schemas() -> Vec<Value> {
         get_status_tool_def(),
     ]
     .into_iter()
-    .map(|t| serde_json::to_value(t).unwrap_or(json!({})))
+    .map(|t| {
+        json!({
+            "name": t.name,
+            "description": t.description,
+            "parameters": t.input_schema,
+            "inputSchema": t.input_schema,
+        })
+    })
     .collect()
 }
 
@@ -801,6 +917,7 @@ pub fn all_mcp_tools() -> Vec<Tool> {
         get_outline_tool_def(),
         read_symbol_tool_def(),
         replace_symbol_tool_def(),
+        read_file_tool_def(),
         list_files_tool_def(),
         grep_search_tool_def(),
         write_file_tool_def(),
@@ -890,6 +1007,21 @@ mod tests {
 
         // cleanup
         let _ = std::fs::remove_file(target_path);
+    }
+
+    #[test]
+    fn test_read_file_execution() {
+        let args = json!({
+            "path": "Cargo.toml",
+            "start_line": 1,
+            "end_line": 5
+        });
+        let res = execute_read_file(Some(args)).unwrap();
+        assert_eq!(res.is_error, None);
+        let Content::Text { text } = &res.content[0];
+        assert!(text.contains("Cargo.toml"));
+        assert!(text.contains("total_lines"));
+        assert!(text.contains("[package]"));
     }
 
     #[test]

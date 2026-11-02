@@ -58,16 +58,29 @@ pub fn validate_path<P: AsRef<Path>>(path: P) -> Result<PathBuf> {
     let resolved_path = if abs_path.exists() {
         abs_path.canonicalize()?
     } else {
-        if let Some(parent) = abs_path.parent() {
-            if parent.exists() {
-                parent.canonicalize()?.join(abs_path.file_name().unwrap())
-            } else {
-                // If parent doesn't exist, we reject it because we can't safely resolve it
-                return Err(anyhow!("Access denied: Parent directory does not exist"));
+        // Find the closest existing ancestor to resolve symlinks and ensure safety
+        let mut existing_ancestor = abs_path.as_path();
+        let mut missing_segments = Vec::new();
+        while !existing_ancestor.exists() {
+            if let Some(file_name) = existing_ancestor.file_name() {
+                missing_segments.push(file_name);
             }
-        } else {
-            abs_path.clone()
+            if let Some(parent) = existing_ancestor.parent() {
+                existing_ancestor = parent;
+            } else {
+                break;
+            }
         }
+
+        if !existing_ancestor.exists() {
+            return Err(anyhow!("Access denied: Cannot find valid root ancestor"));
+        }
+
+        let mut resolved = existing_ancestor.canonicalize()?;
+        for segment in missing_segments.into_iter().rev() {
+            resolved = resolved.join(segment);
+        }
+        resolved
     };
 
     if !resolved_path.starts_with(&cwd) {
@@ -135,5 +148,9 @@ mod tests {
         let current_dir = env::current_dir().unwrap();
         let file_ok = current_dir.join("src/main.rs");
         assert!(validate_path(&file_ok).is_ok());
+
+        // Test deeply nested non-existent path
+        let nested_nonexistent = current_dir.join("deeply/nested/non_existent_dir/new_file.rs");
+        assert!(validate_path(&nested_nonexistent).is_ok());
     }
 }

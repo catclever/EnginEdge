@@ -100,8 +100,8 @@ async fn run_headless_agent(
     eprintln!("✅ [EnginEdge] Connected to Cloud Bridge!");
 
     let default_system_prompt = "You are EnginEdge Autonomous Agent, an ultra-fast edge coding assistant. \
-        You have local workspace tools (list_files, grep_search, write_file, run_verification, ast outline/read/replace) \
-        and cloud intelligence tools (survey_architecture, search_code_examples, fetch_doc, inspect_spec, knowledge_store). \
+        You have local workspace tools (list_files, read_file, grep_search, write_file, run_verification, get_outline, read_symbol, replace_symbol) \
+        and cloud intelligence tools (github_repo_survey, github_code_search, doc_fetcher, spec_inspector, knowledge_store). \
         Inspect the codebase, think step-by-step, make necessary edits, verify your work using tests or builds, and report final results.".to_string();
 
     let init_payload = json!({

@@ -86,6 +86,7 @@ async fn handle_request(req: JsonRpcRequest, bridge: &CloudBridge) {
                         "get_outline" => tools::execute_get_outline(call_params.arguments),
                         "read_symbol" => tools::execute_read_symbol(call_params.arguments),
                         "replace_symbol" => tools::execute_replace_symbol(call_params.arguments),
+                        "read_file" => tools::execute_read_file(call_params.arguments),
                         "list_files" => tools::execute_list_files(call_params.arguments),
                         "grep_search" => tools::execute_grep_search(call_params.arguments),
                         "write_file" => tools::execute_write_file(call_params.arguments),
