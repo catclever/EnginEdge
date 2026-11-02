@@ -12,6 +12,7 @@ mod server;
 mod tools;
 mod security;
 pub mod policy;
+pub mod bench;
 
 const DEFAULT_HUB_URL: &str = "wss://dalembert-production.up.railway.app";
 
@@ -54,6 +55,36 @@ enum Commands {
         #[arg(long)]
         profile: Option<String>,
     },
+    /// Run automated coding benchmark evaluations against datasets
+    Bench {
+        /// Path to dataset directory or manifest (JSONL / directory of problem cases). Default: built-in suite.
+        #[arg(long, short)]
+        dataset: Option<String>,
+
+        /// Comma-separated languages to evaluate (e.g. "rust,go,python,javascript")
+        #[arg(long, default_value = "rust,go,python,javascript")]
+        langs: String,
+
+        /// Maximum number of tasks to evaluate (sampling limit)
+        #[arg(long)]
+        limit: Option<usize>,
+
+        /// Output report path (Markdown)
+        #[arg(long, short, default_value = "bench_report.md")]
+        output: String,
+
+        /// LLM profile name on cloud hub
+        #[arg(long)]
+        profile: Option<String>,
+
+        /// Dry-run mode: verify sandbox setup and test runner without cloud LLM inference
+        #[arg(long)]
+        dry_run: bool,
+
+        /// Timeout in seconds per task
+        #[arg(long, default_value = "180")]
+        timeout: u64,
+    },
 }
 
 #[tokio::main]
@@ -91,6 +122,33 @@ async fn main() -> anyhow::Result<()> {
         }
         Some(Commands::Run { task, system_prompt, profile }) => {
             run_headless_agent(bridge, task, system_prompt, profile).await?;
+        }
+        Some(Commands::Bench {
+            dataset,
+            langs,
+            limit,
+            output,
+            profile,
+            dry_run,
+            timeout,
+        }) => {
+            let lang_list = langs
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect();
+
+            let options = bench::BenchOptions {
+                dataset_path: dataset,
+                langs: lang_list,
+                limit,
+                output_path: output,
+                profile,
+                dry_run,
+                timeout_secs: timeout,
+            };
+
+            bench::run_benchmark(Some(bridge), options).await?;
         }
     }
 
