@@ -420,7 +420,7 @@ pub async fn run_benchmark(bridge: Option<CloudBridge>, options: BenchOptions) -
 
         if !options.dry_run {
             if let Some(ref b) = bridge {
-                if b.wait_for_connection(Duration::from_secs(5)).await {
+                if b.wait_for_connection(Duration::from_secs(15)).await {
                     let mut event_rx = b.subscribe_events();
 
                     let init_payload = json!({
@@ -449,6 +449,7 @@ pub async fn run_benchmark(bridge: Option<CloudBridge>, options: BenchOptions) -
                                                 thought_steps += 1;
                                                 let t_text = data.as_str().unwrap_or("");
                                                 trace_log.push_str(&format!("[THOUGHT #{}] {}\n", thought_steps, t_text));
+                                                eprintln!("💭 [Thought] {}", t_text);
                                             } else if event == "tool_call_start" {
                                                 total_tool_calls += 1;
                                                 let tool_name = data.get("tool").and_then(|t| t.as_str()).unwrap_or("");
@@ -458,16 +459,20 @@ pub async fn run_benchmark(bridge: Option<CloudBridge>, options: BenchOptions) -
                                                     file_tool_calls += 1;
                                                 }
                                                 trace_log.push_str(&format!("[TOOL_CALL #{}] {}\n", total_tool_calls, data));
+                                                eprintln!("🛠️ [Tool Call] {}", data);
                                             } else if event == "tool_call_end" {
                                                 trace_log.push_str(&format!("[TOOL_RESULT] {}\n", data));
+                                                eprintln!("✔️ [Tool Result] {}", data);
                                             }
                                         }
                                         BridgeEvent::Finished { result, status } => {
                                             trace_log.push_str(&format!("[FINISHED] Status: {}, Result: {}\n", status, result));
+                                            eprintln!("🏁 [Finished] Status: {}", status);
                                             break;
                                         }
                                         BridgeEvent::Error { message } => {
                                             trace_log.push_str(&format!("[AGENT ERROR] {}\n", message));
+                                            eprintln!("❌ [Error] {}", message);
                                             error_msg = Some(message);
                                             break;
                                         }
@@ -481,6 +486,7 @@ pub async fn run_benchmark(bridge: Option<CloudBridge>, options: BenchOptions) -
                 } else {
                     let err_str = "Cloud bridge not connected".to_string();
                     trace_log.push_str(&format!("[FATAL ERROR] {}\n", err_str));
+                    eprintln!("❌ [Bridge] Failed to connect to Cloud Bridge within 15s");
                     error_msg = Some(err_str);
                 }
             } else {

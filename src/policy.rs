@@ -89,8 +89,13 @@ pub enum PolicyCheckResult {
     },
 }
 
-/// Evaluates command string against fixed, deterministic security rules (0-100 scale).
+/// Evaluates command string against fixed, deterministic security rules (0-100 scale) using current max weight.
 pub fn evaluate_command(raw_cmd: &str) -> PolicyCheckResult {
+    evaluate_command_with_weight(raw_cmd, get_max_weight())
+}
+
+/// Evaluates command string against fixed, deterministic security rules with an explicit max weight threshold.
+pub fn evaluate_command_with_weight(raw_cmd: &str, max_allowed: u32) -> PolicyCheckResult {
     let raw_cmd = raw_cmd.trim();
     if raw_cmd.is_empty() {
         return PolicyCheckResult::Denied {
@@ -169,7 +174,6 @@ pub fn evaluate_command(raw_cmd: &str) -> PolicyCheckResult {
     }
 
     let final_weight = (highest_sub_weight + chain_penalty).min(PERMANENT_BLOCK_WEIGHT);
-    let max_allowed = get_max_weight();
 
     if final_weight > max_allowed {
         PolicyCheckResult::Denied {
@@ -371,34 +375,28 @@ mod tests {
 
     #[test]
     fn test_eval_mode_unlocks_build_and_cmake() {
-        // In dev mode (weight 40), cmake and go build should be denied
-        init_policy("dev", None);
-        let res = evaluate_command("cmake -B build");
+        // Under dev threshold (weight 40), cmake and go build are denied
+        let res = evaluate_command_with_weight("cmake -B build", 40);
         assert!(matches!(res, PolicyCheckResult::Denied { weight: 60, .. }));
 
-        let res = evaluate_command("go build");
+        let res = evaluate_command_with_weight("go build", 40);
         assert!(matches!(res, PolicyCheckResult::Denied { weight: 50, .. }));
 
-        // In eval mode (weight 75), both should be allowed
-        init_policy("eval", None);
-        assert_eq!(get_max_weight(), 75);
-
-        let res = evaluate_command("cmake -B build");
+        // Under eval threshold (weight 75), both are allowed
+        let res = evaluate_command_with_weight("cmake -B build", 75);
         assert!(matches!(res, PolicyCheckResult::Allowed { weight: 60, .. }));
 
-        let res = evaluate_command("go build");
+        let res = evaluate_command_with_weight("go build", 75);
         assert!(matches!(res, PolicyCheckResult::Allowed { weight: 50, .. }));
 
-        let res = evaluate_command("git restore src/main.rs");
+        let res = evaluate_command_with_weight("git restore src/main.rs", 75);
         assert!(matches!(res, PolicyCheckResult::Allowed { weight: 70, .. }));
     }
 
     #[test]
     fn test_controlled_chaining_with_and() {
-        init_policy("eval", None);
-
         // cmake (60) && ctest (60) + chained penalty (10) = 70 <= 75 -> Allowed
-        let res = evaluate_command("cmake -B build && ctest --test-dir build");
+        let res = evaluate_command_with_weight("cmake -B build && ctest --test-dir build", 75);
         match res {
             PolicyCheckResult::Allowed { weight, sub_commands } => {
                 assert_eq!(weight, 70);
@@ -407,9 +405,8 @@ mod tests {
             _ => panic!("Expected allowed chain"),
         }
 
-        // In dev mode (40), it should be denied
-        init_policy("dev", None);
-        let res = evaluate_command("cmake -B build && ctest --test-dir build");
+        // Under dev threshold (40), it should be denied
+        let res = evaluate_command_with_weight("cmake -B build && ctest --test-dir build", 40);
         assert!(matches!(res, PolicyCheckResult::Denied { weight: 70, .. }));
     }
 

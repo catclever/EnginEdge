@@ -945,6 +945,87 @@ pub fn all_mcp_tools() -> Vec<Tool> {
     ]
 }
 
+pub fn tool_by_name(name: &str) -> Option<Tool> {
+    match name {
+        "get_outline" => Some(get_outline_tool_def()),
+        "read_symbol" => Some(read_symbol_tool_def()),
+        "replace_symbol" => Some(replace_symbol_tool_def()),
+        "read_file" => Some(read_file_tool_def()),
+        "list_files" => Some(list_files_tool_def()),
+        "grep_search" => Some(grep_search_tool_def()),
+        "write_file" => Some(write_file_tool_def()),
+        "run_verification" => Some(run_verification_tool_def()),
+        "ping" => Some(ping_tool_def()),
+        "echo" => Some(echo_tool_def()),
+        "get_status" => Some(get_status_tool_def()),
+        "survey_architecture" => Some(survey_architecture_tool_def()),
+        "search_code_examples" => Some(search_code_examples_tool_def()),
+        "fetch_doc" => Some(fetch_doc_tool_def()),
+        "inspect_spec" => Some(inspect_spec_tool_def()),
+        _ => None,
+    }
+}
+
+/// Computes the filtered list of MCP tools based on preset, include list, and exclude list.
+///
+/// Presets:
+/// - "full" | "all" (default): All 15 tools
+/// - "light" | "plugin": 9 core tools (AST + Cloud Intelligence + Telemetry/Verification)
+/// - "ast" | "ast-only": 3 AST structural manipulation tools only
+pub fn get_filtered_mcp_tools(
+    preset: Option<&str>,
+    include: Option<&str>,
+    exclude: Option<&str>,
+) -> Vec<Tool> {
+    let preset_norm = preset
+        .map(|s| s.trim().to_lowercase())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "full".to_string());
+
+    let mut tools = match preset_norm.as_str() {
+        "light" | "plugin" => vec![
+            get_outline_tool_def(),
+            read_symbol_tool_def(),
+            replace_symbol_tool_def(),
+            survey_architecture_tool_def(),
+            search_code_examples_tool_def(),
+            fetch_doc_tool_def(),
+            inspect_spec_tool_def(),
+            get_status_tool_def(),
+            run_verification_tool_def(),
+        ],
+        "ast" | "ast-only" | "ast_only" => vec![
+            get_outline_tool_def(),
+            read_symbol_tool_def(),
+            replace_symbol_tool_def(),
+        ],
+        _ => all_mcp_tools(),
+    };
+
+    // Apply include (force add tool if not already present)
+    if let Some(inc_str) = include {
+        for name in inc_str.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()) {
+            if !tools.iter().any(|t| t.name == name) {
+                if let Some(tool) = tool_by_name(name) {
+                    tools.push(tool);
+                }
+            }
+        }
+    }
+
+    // Apply exclude (force remove tool if present)
+    if let Some(exc_str) = exclude {
+        let exclude_set: std::collections::HashSet<&str> = exc_str
+            .split(',')
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+            .collect();
+        tools.retain(|t| !exclude_set.contains(t.name.as_str()));
+    }
+
+    tools
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1093,5 +1174,68 @@ mod tests {
         let inspect_res = execute_inspect_spec(Some(json!({"spec_url": "test"})), &bridge).await;
         assert!(inspect_res.is_err());
         assert_eq!(inspect_res.unwrap_err().code, -32000);
+    }
+
+    #[test]
+    fn test_tools_preset_full() {
+        let tools = get_filtered_mcp_tools(Some("full"), None, None);
+        assert_eq!(tools.len(), 15);
+
+        let default_tools = get_filtered_mcp_tools(None, None, None);
+        assert_eq!(default_tools.len(), 15);
+    }
+
+    #[test]
+    fn test_tools_preset_light() {
+        let tools = get_filtered_mcp_tools(Some("light"), None, None);
+        assert_eq!(tools.len(), 9);
+
+        // Verify duplicates and overlaps are stripped
+        let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
+        assert!(!names.contains(&"read_file"));
+        assert!(!names.contains(&"write_file"));
+        assert!(!names.contains(&"list_files"));
+        assert!(!names.contains(&"grep_search"));
+        assert!(!names.contains(&"ping"));
+        assert!(!names.contains(&"echo"));
+
+        // Verify core differentiators are present
+        assert!(names.contains(&"get_outline"));
+        assert!(names.contains(&"read_symbol"));
+        assert!(names.contains(&"replace_symbol"));
+        assert!(names.contains(&"survey_architecture"));
+        assert!(names.contains(&"get_status"));
+        assert!(names.contains(&"run_verification"));
+    }
+
+    #[test]
+    fn test_tools_preset_ast_only() {
+        let tools = get_filtered_mcp_tools(Some("ast-only"), None, None);
+        assert_eq!(tools.len(), 3);
+        let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
+        assert_eq!(names, vec!["get_outline", "read_symbol", "replace_symbol"]);
+    }
+
+    #[test]
+    fn test_tools_preset_light_with_include_and_exclude() {
+        // Include read_file into light preset
+        let tools_with_inc = get_filtered_mcp_tools(Some("light"), Some("read_file"), None);
+        assert_eq!(tools_with_inc.len(), 10);
+        let names_inc: Vec<&str> = tools_with_inc.iter().map(|t| t.name.as_str()).collect();
+        assert!(names_inc.contains(&"read_file"));
+
+        // Exclude run_verification from light preset
+        let tools_with_exc = get_filtered_mcp_tools(Some("light"), None, Some("run_verification"));
+        assert_eq!(tools_with_exc.len(), 8);
+        let names_exc: Vec<&str> = tools_with_exc.iter().map(|t| t.name.as_str()).collect();
+        assert!(!names_exc.contains(&"run_verification"));
+
+        // Combined include & exclude
+        let tools_combined = get_filtered_mcp_tools(Some("light"), Some("ping,echo"), Some("survey_architecture"));
+        let names_comb: Vec<&str> = tools_combined.iter().map(|t| t.name.as_str()).collect();
+        assert_eq!(names_comb.len(), 10); // 9 + 2 - 1 = 10
+        assert!(names_comb.contains(&"ping"));
+        assert!(names_comb.contains(&"echo"));
+        assert!(!names_comb.contains(&"survey_architecture"));
     }
 }

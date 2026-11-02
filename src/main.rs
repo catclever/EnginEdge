@@ -35,12 +35,36 @@ struct Cli {
     /// Custom max risk weight threshold (0-99). Overrides mode default.
     #[arg(long, env = "ENGINEDGE_MAX_WEIGHT")]
     max_weight: Option<u32>,
+
+    /// Tools preset for MCP server: "full" (all 15 tools), "light" / "plugin" (AST + Cloud + Telemetry, 9 tools), "ast" / "ast-only" (3 tools)
+    #[arg(long, env = "ENGINEDGE_TOOLS_PRESET")]
+    preset: Option<String>,
+
+    /// Comma-separated list of tools to forcefully include in MCP
+    #[arg(long)]
+    include: Option<String>,
+
+    /// Comma-separated list of tools to forcefully exclude from MCP
+    #[arg(long)]
+    exclude: Option<String>,
 }
 
 #[derive(Subcommand)]
 enum Commands {
     /// Start the MCP stdio server (default)
-    Mcp,
+    Mcp {
+        /// Tools preset: "full", "light" / "plugin", "ast" / "ast-only"
+        #[arg(long)]
+        preset: Option<String>,
+
+        /// Comma-separated list of tools to include
+        #[arg(long)]
+        include: Option<String>,
+
+        /// Comma-separated list of tools to exclude
+        #[arg(long)]
+        exclude: Option<String>,
+    },
     /// Run headless autonomous coding agent
     Run {
         /// Task prompt / description for autonomous coding
@@ -120,9 +144,38 @@ async fn main() -> anyhow::Result<()> {
     bridge.start();
 
     match cli.command {
-        Some(Commands::Mcp) | None => {
-            tracing::info!("Starting EnginEdge MCP stdio server...");
-            server::run_stdio_server(bridge).await?;
+        Some(Commands::Mcp { preset, include, exclude }) => {
+            let effective_preset = preset.or(cli.preset).unwrap_or_else(|| "full".to_string());
+            let effective_include = include.or(cli.include);
+            let effective_exclude = exclude.or(cli.exclude);
+
+            tracing::info!(
+                "Starting EnginEdge MCP stdio server (preset: {}, include: {:?}, exclude: {:?})...",
+                effective_preset,
+                effective_include,
+                effective_exclude
+            );
+            let tools = tools::get_filtered_mcp_tools(
+                Some(&effective_preset),
+                effective_include.as_deref(),
+                effective_exclude.as_deref(),
+            );
+            server::run_stdio_server(bridge, tools).await?;
+        }
+        None => {
+            let effective_preset = cli.preset.unwrap_or_else(|| "full".to_string());
+            tracing::info!(
+                "Starting EnginEdge MCP stdio server (default mode, preset: {}, include: {:?}, exclude: {:?})...",
+                effective_preset,
+                cli.include,
+                cli.exclude
+            );
+            let tools = tools::get_filtered_mcp_tools(
+                Some(&effective_preset),
+                cli.include.as_deref(),
+                cli.exclude.as_deref(),
+            );
+            server::run_stdio_server(bridge, tools).await?;
         }
         Some(Commands::Run { task, system_prompt, profile }) => {
             run_headless_agent(bridge, task, system_prompt, profile).await?;

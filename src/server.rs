@@ -7,7 +7,7 @@ use crate::protocol::*;
 use crate::tools;
 use crate::bridge::CloudBridge;
 
-pub async fn run_stdio_server(bridge: CloudBridge) -> anyhow::Result<()> {
+pub async fn run_stdio_server(bridge: CloudBridge, tools: Vec<Tool>) -> anyhow::Result<()> {
     let stdin = tokio::io::stdin();
     let mut reader = BufReader::new(stdin).lines();
 
@@ -15,7 +15,7 @@ pub async fn run_stdio_server(bridge: CloudBridge) -> anyhow::Result<()> {
     // though in a fully async environment we could use tokio::io::stdout().
     // But stdout must be EXCLUSIVELY protocol lines.
 
-    info!("Server listening on stdio");
+    info!("Server listening on stdio (exposed tools: {})", tools.len());
 
     while let Some(line) = reader.next_line().await? {
         let line = line.trim();
@@ -31,7 +31,7 @@ pub async fn run_stdio_server(bridge: CloudBridge) -> anyhow::Result<()> {
                 if let Some(id_val) = value.get("id") {
                     // It's a request
                     if let Ok(request) = serde_json::from_value::<JsonRpcRequest>(value.clone()) {
-                        handle_request(request, &bridge).await;
+                        handle_request(request, &bridge, &tools).await;
                     } else {
                         // Malformed request, send standard error if id can be extracted
                         let id = serde_json::from_value::<Id>(id_val.clone()).unwrap_or(Id::Null);
@@ -55,7 +55,7 @@ pub async fn run_stdio_server(bridge: CloudBridge) -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn handle_request(req: JsonRpcRequest, bridge: &CloudBridge) {
+async fn handle_request(req: JsonRpcRequest, bridge: &CloudBridge, tools: &[Tool]) {
     match req.method.as_str() {
         "initialize" => {
             let result = InitializeResult {
@@ -72,7 +72,7 @@ async fn handle_request(req: JsonRpcRequest, bridge: &CloudBridge) {
         }
         "tools/list" => {
             let result = ToolListResult {
-                tools: tools::all_mcp_tools(),
+                tools: tools.to_vec(),
             };
             send_response(req.id, json!(result));
         }
