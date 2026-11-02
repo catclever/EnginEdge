@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::env;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -382,6 +382,19 @@ pub async fn run_benchmark(bridge: Option<CloudBridge>, options: BenchOptions) -
 
     let original_cwd = env::current_dir()?;
 
+    let abs_log_dir = if Path::new(&options.log_dir).is_absolute() {
+        PathBuf::from(&options.log_dir)
+    } else {
+        original_cwd.join(&options.log_dir)
+    };
+    let _ = fs::create_dir_all(&abs_log_dir);
+
+    let abs_output_path = if Path::new(&options.output_path).is_absolute() {
+        PathBuf::from(&options.output_path)
+    } else {
+        original_cwd.join(&options.output_path)
+    };
+
     for (idx, task) in tasks.iter().enumerate() {
         eprintln!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
         eprintln!("▶ [{}/{}] Evaluating: {} ({})", idx + 1, total_tasks, task.id, task.lang);
@@ -513,8 +526,7 @@ pub async fn run_benchmark(bridge: Option<CloudBridge>, options: BenchOptions) -
         trace_log.push_str(&stderr);
         trace_log.push_str("\n-------------------------------------------------------\n");
 
-        let log_file_path = Path::new(&options.log_dir).join(format!("{}.log", task.id));
-        let _ = fs::create_dir_all(&options.log_dir);
+        let log_file_path = abs_log_dir.join(format!("{}.log", task.id));
         let _ = fs::write(&log_file_path, &trace_log);
         let log_file_str = log_file_path.to_string_lossy().to_string();
 
@@ -545,7 +557,7 @@ pub async fn run_benchmark(bridge: Option<CloudBridge>, options: BenchOptions) -
     }
 
     let report = compile_report(task_results, overall_start.elapsed().as_millis());
-    write_report(&report, &options.output_path)?;
+    write_report(&report, &abs_output_path)?;
 
     Ok(report)
 }
@@ -614,7 +626,7 @@ fn compile_report(results: Vec<TaskResult>, total_duration_ms: u128) -> BenchRep
     }
 }
 
-fn write_report(report: &BenchReport, output_path: &str) -> anyhow::Result<()> {
+fn write_report(report: &BenchReport, output_path: &Path) -> anyhow::Result<()> {
     let mut md = String::new();
 
     md.push_str("# 🚀 EnginEdge Benchmark Evaluation Scorecard\n\n");
@@ -721,17 +733,15 @@ fn write_report(report: &BenchReport, output_path: &str) -> anyhow::Result<()> {
         }
     }
 
+    if let Some(parent) = output_path.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
     fs::write(output_path, &md)?;
 
-    // Also write JSON version alongside
-    let json_path = if output_path.ends_with(".md") {
-        output_path.replace(".md", ".json")
-    } else {
-        format!("{}.json", output_path)
-    };
+    let json_path = output_path.with_extension("json");
     fs::write(json_path, serde_json::to_string_pretty(report)?)?;
 
-    eprintln!("📄 [EnginEdge Bench] Report successfully written to: {}", output_path);
+    eprintln!("📄 [EnginEdge Bench] Report successfully written to: {}", output_path.display());
 
     Ok(())
 }
