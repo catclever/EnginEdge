@@ -350,11 +350,15 @@ fn load_tasks_from_dir(dir: &Path) -> Vec<BenchTask> {
 fn load_tasks_from_file(file: &Path) -> Vec<BenchTask> {
     let mut tasks = Vec::new();
     if let Ok(content) = fs::read_to_string(file) {
-        for line in content.lines() {
-            let line = line.trim();
-            if !line.is_empty() {
-                if let Ok(task) = serde_json::from_str::<BenchTask>(line) {
-                    tasks.push(task);
+        if let Ok(task_vec) = serde_json::from_str::<Vec<BenchTask>>(&content) {
+            tasks = task_vec;
+        } else {
+            for line in content.lines() {
+                let line = line.trim();
+                if !line.is_empty() {
+                    if let Ok(task) = serde_json::from_str::<BenchTask>(line) {
+                        tasks.push(task);
+                    }
                 }
             }
         }
