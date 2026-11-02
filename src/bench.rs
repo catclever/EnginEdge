@@ -37,6 +37,7 @@ pub struct TaskResult {
     pub verification_stdout: String,
     pub verification_stderr: String,
     pub error_message: Option<String>,
+    pub log_file: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -66,6 +67,7 @@ pub struct BenchOptions {
     pub langs: Vec<String>,
     pub limit: Option<usize>,
     pub output_path: String,
+    pub log_dir: String,
     pub profile: Option<String>,
     pub dry_run: bool,
     pub timeout_secs: u64,
@@ -409,6 +411,13 @@ pub async fn run_benchmark(bridge: Option<CloudBridge>, options: BenchOptions) -
         let mut file_tool_calls = 0;
         let mut error_msg = None;
 
+        let mut trace_log = String::new();
+        trace_log.push_str("=======================================================\n");
+        trace_log.push_str(&format!("TASK ID: {} [{}]\n", task.id, task.lang));
+        trace_log.push_str(&format!("TITLE: {}\n", task.title));
+        trace_log.push_str(&format!("PROMPT:\n{}\n", task.prompt));
+        trace_log.push_str("=======================================================\n\n");
+
         if !options.dry_run {
             if let Some(ref b) = bridge {
                 if b.wait_for_connection(Duration::from_secs(5)).await {
@@ -424,7 +433,9 @@ pub async fn run_benchmark(bridge: Option<CloudBridge>, options: BenchOptions) -
                     });
 
                     if let Err(e) = b.send_raw(init_payload.to_string()).await {
-                        error_msg = Some(format!("Failed to dispatch task to Cloud Bridge: {}", e));
+                        let err_str = format!("Failed to dispatch task to Cloud Bridge: {}", e);
+                        trace_log.push_str(&format!("[FATAL ERROR] {}\n", err_str));
+                        error_msg = Some(err_str);
                     } else {
                         let timeout = Duration::from_secs(options.timeout_secs);
                         let timeout_instant = Instant::now();
@@ -436,6 +447,8 @@ pub async fn run_benchmark(bridge: Option<CloudBridge>, options: BenchOptions) -
                                         BridgeEvent::StreamEvent { event, data } => {
                                             if event == "thought" {
                                                 thought_steps += 1;
+                                                let t_text = data.as_str().unwrap_or("");
+                                                trace_log.push_str(&format!("[THOUGHT #{}] {}\n", thought_steps, t_text));
                                             } else if event == "tool_call_start" {
                                                 total_tool_calls += 1;
                                                 let tool_name = data.get("tool").and_then(|t| t.as_str()).unwrap_or("");
@@ -444,12 +457,17 @@ pub async fn run_benchmark(bridge: Option<CloudBridge>, options: BenchOptions) -
                                                 } else if matches!(tool_name, "read_file" | "write_file" | "grep_search" | "list_files") {
                                                     file_tool_calls += 1;
                                                 }
+                                                trace_log.push_str(&format!("[TOOL_CALL #{}] {}\n", total_tool_calls, data));
+                                            } else if event == "tool_call_end" {
+                                                trace_log.push_str(&format!("[TOOL_RESULT] {}\n", data));
                                             }
                                         }
-                                        BridgeEvent::Finished { .. } => {
+                                        BridgeEvent::Finished { result, status } => {
+                                            trace_log.push_str(&format!("[FINISHED] Status: {}, Result: {}\n", status, result));
                                             break;
                                         }
                                         BridgeEvent::Error { message } => {
+                                            trace_log.push_str(&format!("[AGENT ERROR] {}\n", message));
                                             error_msg = Some(message);
                                             break;
                                         }
@@ -461,11 +479,17 @@ pub async fn run_benchmark(bridge: Option<CloudBridge>, options: BenchOptions) -
                         }
                     }
                 } else {
-                    error_msg = Some("Cloud bridge not connected".to_string());
+                    let err_str = "Cloud bridge not connected".to_string();
+                    trace_log.push_str(&format!("[FATAL ERROR] {}\n", err_str));
+                    error_msg = Some(err_str);
                 }
             } else {
-                error_msg = Some("No cloud bridge provided in non-dry-run mode".to_string());
+                let err_str = "No cloud bridge provided in non-dry-run mode".to_string();
+                trace_log.push_str(&format!("[FATAL ERROR] {}\n", err_str));
+                error_msg = Some(err_str);
             }
+        } else {
+            trace_log.push_str("[DRY RUN] Cloud LLM inference skipped.\n");
         }
 
         // Grader: Run verification command directly in sandbox_dir
@@ -473,9 +497,24 @@ pub async fn run_benchmark(bridge: Option<CloudBridge>, options: BenchOptions) -
 
         let duration_ms = task_start.elapsed().as_millis();
 
+        trace_log.push_str("\n-------------------------------------------------------\n");
+        trace_log.push_str(&format!("VERIFY COMMAND: {}\n", task.verify_command));
+        trace_log.push_str(&format!("PASSED: {}\n", passed));
+        trace_log.push_str(&format!("DURATION: {}ms\n", duration_ms));
+        trace_log.push_str("STDOUT:\n");
+        trace_log.push_str(&stdout);
+        trace_log.push_str("\nSTDERR:\n");
+        trace_log.push_str(&stderr);
+        trace_log.push_str("\n-------------------------------------------------------\n");
+
+        let log_file_path = Path::new(&options.log_dir).join(format!("{}.log", task.id));
+        let _ = fs::create_dir_all(&options.log_dir);
+        let _ = fs::write(&log_file_path, &trace_log);
+        let log_file_str = log_file_path.to_string_lossy().to_string();
+
         let icon = if passed { "✅ PASS" } else { "❌ FAIL" };
-        eprintln!("Result: {} (Duration: {}ms, Thoughts: {}, Tools: {} [AST: {}, File: {}])\n",
-            icon, duration_ms, thought_steps, total_tool_calls, ast_tool_calls, file_tool_calls);
+        eprintln!("Result: {} (Duration: {}ms, Thoughts: {}, Tools: {} [AST: {}, File: {}], Log: {})\n",
+            icon, duration_ms, thought_steps, total_tool_calls, ast_tool_calls, file_tool_calls, log_file_str);
 
         task_results.push(TaskResult {
             task_id: task.id.clone(),
@@ -489,6 +528,7 @@ pub async fn run_benchmark(bridge: Option<CloudBridge>, options: BenchOptions) -
             verification_stdout: stdout,
             verification_stderr: stderr,
             error_message: error_msg,
+            log_file: Some(log_file_str),
         });
 
         // Restore original directory if changed & cleanup sandbox
@@ -637,6 +677,43 @@ fn write_report(report: &BenchReport, output_path: &str) -> anyhow::Result<()> {
             note
         ));
     }
+    md.push('\n');
+
+    md.push_str("## 🔍 Failure Diagnostics & Detailed Error Logs\n\n");
+
+    let failed_tasks: Vec<_> = report.task_results.iter().filter(|r| !r.passed).collect();
+    if failed_tasks.is_empty() {
+        md.push_str("🎉 **All evaluated tasks passed successfully! No failure diagnostics needed.**\n\n");
+    } else {
+        md.push_str("> 💡 **排障提示**：点击下方折叠卡片可直接查看未通过任务的编译器报错、单元测试断言失败堆栈或执行异常。完整思考与工具交互轨迹已持久化至日志目录。\n\n");
+        for r in failed_tasks {
+            md.push_str(&format!(
+                "<details>\n<summary>❌ <b>{}</b> (<code>{}</code>) — 点击展开失败报错堆栈</summary>\n\n",
+                r.task_id, r.lang
+            ));
+            if let Some(ref err) = r.error_message {
+                md.push_str(&format!("- **通信/调度异常**: `{}`\n", err));
+            }
+            if let Some(ref log_f) = r.log_file {
+                md.push_str(&format!("- **完整轨迹日志**: `{}`\n", log_f));
+            }
+            md.push_str(&format!("- **执行耗时**: `{:.2}s`\n", r.duration_ms as f64 / 1000.0));
+            md.push_str(&format!("- **交互遥测**: 思考 {} 步，调用工具 {} 次 (AST: {}, File: {})\n\n",
+                r.thought_steps, r.total_tool_calls, r.ast_tool_calls, r.file_tool_calls));
+
+            let output = if !r.verification_stderr.trim().is_empty() {
+                &r.verification_stderr
+            } else if !r.verification_stdout.trim().is_empty() {
+                &r.verification_stdout
+            } else {
+                "No verification output captured (exit code non-zero)"
+            };
+
+            md.push_str("```text\n");
+            md.push_str(output.trim());
+            md.push_str("\n```\n\n</details>\n\n");
+        }
+    }
 
     fs::write(output_path, &md)?;
 
@@ -692,6 +769,7 @@ mod tests {
                 verification_stdout: "".to_string(),
                 verification_stderr: "".to_string(),
                 error_message: None,
+                log_file: Some("bench_logs/task1.log".to_string()),
             },
             TaskResult {
                 task_id: "task2".to_string(),
@@ -705,6 +783,7 @@ mod tests {
                 verification_stdout: "".to_string(),
                 verification_stderr: "".to_string(),
                 error_message: None,
+                log_file: Some("bench_logs/task2.log".to_string()),
             },
         ];
 
@@ -728,6 +807,7 @@ mod tests {
             langs: vec!["rust".to_string()],
             limit: Some(1),
             output_path: "target/test_dry_run_report.md".to_string(),
+            log_dir: "target/test_bench_logs".to_string(),
             profile: None,
             dry_run: true,
             timeout_secs: 5,
@@ -739,7 +819,16 @@ mod tests {
         assert_eq!(report.passed_tasks, 0);
 
         assert!(Path::new("target/test_dry_run_report.md").exists());
+        let report_content = fs::read_to_string("target/test_dry_run_report.md").unwrap();
+        assert!(report_content.contains("Failure Diagnostics"));
+
+        assert!(Path::new("target/test_bench_logs/rust_lru_cache.log").exists());
+        let log_content = fs::read_to_string("target/test_bench_logs/rust_lru_cache.log").unwrap();
+        assert!(log_content.contains("rust_lru_cache"));
+        assert!(log_content.contains("VERIFY COMMAND"));
+
         let _ = fs::remove_file("target/test_dry_run_report.md");
         let _ = fs::remove_file("target/test_dry_run_report.json");
+        let _ = fs::remove_dir_all("target/test_bench_logs");
     }
 }

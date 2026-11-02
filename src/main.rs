@@ -73,6 +73,10 @@ enum Commands {
         #[arg(long, short, default_value = "bench_report.md")]
         output: String,
 
+        /// Directory to store per-task execution trace logs
+        #[arg(long, default_value = "bench_logs")]
+        log_dir: String,
+
         /// LLM profile name on cloud hub
         #[arg(long)]
         profile: Option<String>,
@@ -128,6 +132,7 @@ async fn main() -> anyhow::Result<()> {
             langs,
             limit,
             output,
+            log_dir,
             profile,
             dry_run,
             timeout,
@@ -143,6 +148,7 @@ async fn main() -> anyhow::Result<()> {
                 langs: lang_list,
                 limit,
                 output_path: output,
+                log_dir,
                 profile,
                 dry_run,
                 timeout_secs: timeout,
