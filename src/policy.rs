@@ -259,6 +259,7 @@ fn evaluate_single_subcommand(tokens: &[&str]) -> Result<u32, String> {
         }
 
         // === Level 2-3: JavaScript / TypeScript Ecosystem ===
+        "jest" => Ok(30),
         "npm" | "pnpm" | "yarn" | "bun" => {
             let sub = tokens.get(1).copied().unwrap_or("");
             match sub {
@@ -370,6 +371,9 @@ mod tests {
         assert!(matches!(res, PolicyCheckResult::Allowed { weight: 30, .. }));
 
         let res = evaluate_command("npm test");
+        assert!(matches!(res, PolicyCheckResult::Allowed { weight: 30, .. }));
+
+        let res = evaluate_command("jest ./*");
         assert!(matches!(res, PolicyCheckResult::Allowed { weight: 30, .. }));
     }
 
