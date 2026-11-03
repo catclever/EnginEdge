@@ -34,7 +34,9 @@ def parse_exercise(lang: str, ex_dir: Path) -> dict:
         "rust": (".rs", ".toml"),
         "go": (".go", ".mod"),
         "python": (".py",),
-        "javascript": (".js", ".json", ".mjs"),
+        "javascript": (".js", ".json", ".mjs", ".cjs"),
+        "cpp": (".cpp", ".h", ".hpp", "CMakeLists.txt"),
+        "java": (".java", ".gradle", ".properties"),
     }
     target_exts = allowed_exts.get(lang, (".txt",))
     
@@ -59,7 +61,11 @@ def parse_exercise(lang: str, ex_dir: Path) -> dict:
         test_file = f"{ex_slug}_test.py"
         verify_command = f"python3 -m unittest discover -s . -p {test_file}"
     elif lang == "javascript":
-        verify_command = "node test.js"
+        verify_command = "jest ./*"
+    elif lang == "cpp":
+        verify_command = "cmake -B build -DEXERCISM_RUN_ALL_TESTS=ON && cmake --build build"
+    elif lang == "java":
+        verify_command = "gradle test"
 
     return {
         "id": f"{lang}_{ex_name}",
@@ -75,29 +81,47 @@ def main():
     out_dir = Path(sys.argv[2] if len(sys.argv) > 2 else "datasets")
     out_dir.mkdir(parents=True, exist_ok=True)
     
-    languages = ["rust", "go", "python"]
+    languages = ["rust", "go", "python", "javascript", "cpp", "java"]
     all_tasks = []
     
     for lang in languages:
         practice_dir = polyglot_root / lang / "exercises" / "practice"
         if not practice_dir.exists():
             continue
+        lang_tasks = []
         for ex_path in sorted(practice_dir.iterdir()):
             if ex_path.is_dir() and not ex_path.name.startswith("."):
                 task = parse_exercise(lang, ex_path)
                 if task["files"]:
-                    all_tasks.append(task)
+                    lang_tasks.append(task)
+        print(f"Loaded {len(lang_tasks)} tasks for {lang}.")
+        all_tasks.extend(lang_tasks)
+        
+        # Per-language dataset
+        lang_file = out_dir / f"polyglot_{lang}_{len(lang_tasks)}.jsonl"
+        with open(lang_file, "w", encoding="utf-8") as f:
+            for t in lang_tasks:
+                f.write(json.dumps(t, ensure_ascii=False) + "\n")
+        print(f"  -> Wrote {lang_file}")
                     
-    print(f"Loaded {len(all_tasks)} total exercises across {languages}.")
+    print(f"\nTotal loaded: {len(all_tasks)} exercises across all 6 languages.")
     
-    # Save full polyglot dataset (JSONL)
-    full_jsonl = out_dir / "polyglot_full.jsonl"
-    with open(full_jsonl, "w", encoding="utf-8") as f:
+    # Save full 225 polyglot dataset (JSONL)
+    full_225 = out_dir / "polyglot_225_full.jsonl"
+    with open(full_225, "w", encoding="utf-8") as f:
         for t in all_tasks:
             f.write(json.dumps(t, ensure_ascii=False) + "\n")
-    print(f"Wrote full dataset to {full_jsonl}")
+    print(f"Wrote full 225-task dataset to {full_225}")
 
-    # Select canonical Batch 1 (6 tasks: 2 Rust, 2 Go, 2 Python)
+    # Save remaining 122 tasks (javascript, cpp, java)
+    remaining_122 = [t for t in all_tasks if t["lang"] in ("javascript", "cpp", "java")]
+    rem_file = out_dir / "polyglot_remaining_122.jsonl"
+    with open(rem_file, "w", encoding="utf-8") as f:
+        for t in remaining_122:
+            f.write(json.dumps(t, ensure_ascii=False) + "\n")
+    print(f"Wrote remaining {len(remaining_122)} tasks (JS, C++, Java) to {rem_file}")
+
+    # Canonical Batch 1 (6 tasks: 2 Rust, 2 Go, 2 Python)
     batch1_ids = {
         "rust_accumulate", "rust_word-count",
         "go_matrix", "go_palindrome-products",
@@ -105,9 +129,8 @@ def main():
     }
     batch1_tasks = [t for t in all_tasks if t["id"] in batch1_ids]
     if len(batch1_tasks) < 6:
-        # Fallback to first 2 of each
         batch1_tasks = []
-        for l in languages:
+        for l in ["rust", "go", "python"]:
             batch1_tasks.extend([t for t in all_tasks if t["lang"] == l][:2])
             
     batch1_jsonl = out_dir / "polyglot_batch1.jsonl"
