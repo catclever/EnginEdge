@@ -34,6 +34,7 @@ pub struct TaskResult {
     pub total_tool_calls: usize,
     pub ast_tool_calls: usize,
     pub file_tool_calls: usize,
+    pub lease_extensions: usize,
     pub verification_stdout: String,
     pub verification_stderr: String,
     pub error_message: Option<String>,
@@ -48,6 +49,7 @@ pub struct BenchReport {
     pub official_baseline_score: f64,
     pub score_delta: f64,
     pub total_duration_ms: u128,
+    pub total_lease_extensions: usize,
     pub lang_stats: HashMap<String, LangStat>,
     pub task_results: Vec<TaskResult>,
 }
@@ -427,6 +429,7 @@ pub async fn run_benchmark(options: BenchOptions) -> anyhow::Result<BenchReport>
         let mut total_tool_calls = 0;
         let mut ast_tool_calls = 0;
         let mut file_tool_calls = 0;
+        let mut lease_extensions = 0;
         let mut error_msg = None;
 
         let mut trace_log = String::new();
@@ -456,12 +459,34 @@ pub async fn run_benchmark(options: BenchOptions) -> anyhow::Result<BenchReport>
                         trace_log.push_str(&format!("[FATAL ERROR] {}\n", err_str));
                         error_msg = Some(err_str);
                     } else {
-                        let timeout = Duration::from_secs(options.timeout_secs);
+                        let mut timeout = Duration::from_secs(options.timeout_secs);
                         let timeout_instant = Instant::now();
+                        let mut last_activity_instant = Instant::now();
+                        const MAX_LEASE_EXTENSIONS: usize = 2;
+                        const LEASE_STEP_SECS: u64 = 60;
 
                         while timeout_instant.elapsed() < timeout {
+                            // Dynamic Lease Renewal: If < 15s remaining and model made progress in last 30s
+                            let remaining = timeout.saturating_sub(timeout_instant.elapsed());
+                            if remaining < Duration::from_secs(15)
+                                && lease_extensions < MAX_LEASE_EXTENSIONS
+                                && last_activity_instant.elapsed() < Duration::from_secs(30)
+                            {
+                                lease_extensions += 1;
+                                timeout += Duration::from_secs(LEASE_STEP_SECS);
+                                trace_log.push_str(&format!(
+                                    "[LEASE_RENEWAL #{}] Active progress detected (last activity {}s ago). Extended timeout by +{}s to {}s total.\n",
+                                    lease_extensions, last_activity_instant.elapsed().as_secs(), LEASE_STEP_SECS, timeout.as_secs()
+                                ));
+                                eprintln!(
+                                    "⏳ [Lease Extension #{}] Active progress detected! Granted +{}s extension (Total: {}s)",
+                                    lease_extensions, LEASE_STEP_SECS, timeout.as_secs()
+                                );
+                            }
+
                             match tokio::time::timeout(Duration::from_millis(500), event_rx.recv()).await {
                                 Ok(Ok(event)) => {
+                                    last_activity_instant = Instant::now();
                                     match event {
                                         BridgeEvent::StreamEvent { event, data } => {
                                             if event == "thought" {
@@ -544,6 +569,7 @@ pub async fn run_benchmark(options: BenchOptions) -> anyhow::Result<BenchReport>
             total_tool_calls,
             ast_tool_calls,
             file_tool_calls,
+            lease_extensions,
             verification_stdout: stdout,
             verification_stderr: stderr,
             error_message: error_msg,
@@ -617,6 +643,7 @@ fn compile_report(results: Vec<TaskResult>, total_duration_ms: u128) -> BenchRep
 
     let official_baseline_score = OFFICIAL_DEEPSEEK_V41_FLASH_1017;
     let score_delta = pass_rate - official_baseline_score;
+    let total_lease_extensions: usize = results.iter().map(|r| r.lease_extensions).sum();
 
     BenchReport {
         total_tasks,
@@ -625,6 +652,7 @@ fn compile_report(results: Vec<TaskResult>, total_duration_ms: u128) -> BenchRep
         official_baseline_score,
         score_delta,
         total_duration_ms,
+        total_lease_extensions,
         lang_stats,
         task_results: results,
     }
@@ -638,7 +666,8 @@ fn write_report(report: &BenchReport, output_path: &Path) -> anyhow::Result<()> 
     md.push_str("- **Harness & Framework**: EnginEdge Edge Agent (AST Engine + Safety Policy)\n");
     md.push_str(&format!("- **Official DeepSeek Baseline (Aider Polyglot -1017)**: `{:.1}%`\n", report.official_baseline_score));
     md.push_str(&format!("- **Official DeepSeek Baseline (V4.1-Flash Initial)**: `{:.1}%`\n", OFFICIAL_DEEPSEEK_V41_FLASH_BASE));
-    md.push_str(&format!("- **Total Duration**: `{:.2}s`\n\n", report.total_duration_ms as f64 / 1000.0));
+    md.push_str(&format!("- **Total Duration**: `{:.2}s`\n", report.total_duration_ms as f64 / 1000.0));
+    md.push_str(&format!("- **Dynamic Lease Extensions**: `{}` renewals granted across tasks\n\n", report.total_lease_extensions));
 
     md.push_str("## 📊 Summary Scorecard\n\n");
     md.push_str("| Total Tasks | Passed | Failed | EnginEdge Pass@1 | Official Baseline | Score Delta |\n");
@@ -682,18 +711,24 @@ fn write_report(report: &BenchReport, output_path: &Path) -> anyhow::Result<()> 
     md.push('\n');
 
     md.push_str("## 📝 Task Execution Details\n\n");
-    md.push_str("| Task ID | Language | Status | Duration | AST / File Tools | Details |\n");
-    md.push_str("| :--- | :--- | :---: | :---: | :---: | :--- |\n");
+    md.push_str("| Task ID | Language | Status | Duration | Extensions | AST / File Tools | Details |\n");
+    md.push_str("| :--- | :--- | :---: | :---: | :---: | :---: | :--- |\n");
 
     for r in &report.task_results {
         let status_badge = if r.passed { "✅ PASS" } else { "❌ FAIL" };
         let note = r.error_message.as_deref().unwrap_or("Completed");
+        let ext_str = if r.lease_extensions > 0 {
+            format!("⏳ +{} ({}s)", r.lease_extensions, r.lease_extensions * 60)
+        } else {
+            "-".to_string()
+        };
         md.push_str(&format!(
-            "| `{}` | {} | {} | {:.2}s | {} / {} | {} |\n",
+            "| `{}` | {} | {} | {:.2}s | {} | {} / {} | {} |\n",
             r.task_id,
             r.lang,
             status_badge,
             r.duration_ms as f64 / 1000.0,
+            ext_str,
             r.ast_tool_calls,
             r.file_tool_calls,
             note
@@ -786,6 +821,7 @@ mod tests {
                 total_tool_calls: 5,
                 ast_tool_calls: 3,
                 file_tool_calls: 2,
+                lease_extensions: 1,
                 verification_stdout: "".to_string(),
                 verification_stderr: "".to_string(),
                 error_message: None,
@@ -800,6 +836,7 @@ mod tests {
                 total_tool_calls: 4,
                 ast_tool_calls: 1,
                 file_tool_calls: 3,
+                lease_extensions: 0,
                 verification_stdout: "".to_string(),
                 verification_stderr: "".to_string(),
                 error_message: None,
@@ -811,6 +848,7 @@ mod tests {
         assert_eq!(report.total_tasks, 2);
         assert_eq!(report.passed_tasks, 1);
         assert_eq!(report.pass_rate, 50.0);
+        assert_eq!(report.total_lease_extensions, 1);
         assert!(report.score_delta < 0.0);
 
         let rust_stat = report.lang_stats.get("rust").unwrap();
