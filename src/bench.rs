@@ -457,7 +457,7 @@ pub async fn run_benchmark(options: BenchOptions) -> anyhow::Result<BenchReport>
                         "type": "init",
                         "task_name": format!("bench_{}", task.id),
                         "prompt": task.prompt,
-                        "system_prompt": "You are EnginEdge Autonomous Agent evaluating a coding benchmark. Inspect the codebase, solve the problem by writing or replacing symbols, verify with tests, and complete the task.",
+                        "system_prompt": "You are EnginEdge Autonomous Agent evaluating a coding benchmark. Inspect the codebase, solve the problem by writing or replacing symbols, verify with tests, and complete the task. For long implementations (>3KB), avoid single-call giant writes that risk token truncation; split into chunks with 'append: true' or replace symbols iteratively with 'replace_symbol'.",
                         "llm_profile": options.profile.clone().unwrap_or_else(|| "default".to_string()),
                         "tools": tools::all_local_tool_schemas(),
                         "max_turns": options.max_turns,

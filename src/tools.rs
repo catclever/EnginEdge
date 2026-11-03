@@ -575,7 +575,7 @@ pub fn execute_write_file(args: Option<Value>) -> Result<CallToolResult, JsonRpc
 
     let path_str = args_obj.get("path").and_then(|p| p.as_str()).ok_or_else(|| JsonRpcError {
         code: -32602,
-        message: "Missing required argument 'path'".to_string(),
+        message: "Missing required argument 'path'. Tip: If your tool call was truncated by token limits, split file into smaller chunks using 'append: true' or use 'replace_symbol'.".to_string(),
         data: None,
     })?;
 
