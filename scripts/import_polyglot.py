@@ -61,7 +61,7 @@ def parse_exercise(lang: str, ex_dir: Path) -> dict:
         test_file = f"{ex_slug}_test.py"
         verify_command = f"python3 -m unittest discover -s . -p {test_file}"
     elif lang == "javascript":
-        verify_command = "jest"
+        verify_command = "npm test"
     elif lang == "cpp":
         verify_command = "cmake -B build -DEXERCISM_RUN_ALL_TESTS=ON && cmake --build build"
     elif lang == "java":

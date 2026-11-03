@@ -413,7 +413,8 @@ pub async fn run_benchmark(options: BenchOptions) -> anyhow::Result<BenchReport>
 
         let task_start = Instant::now();
         let unique_id = format!("{}_{}", std::process::id(), SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_nanos());
-        let sandbox_dir = env::temp_dir().join(format!("enginedge_bench_{}_{}", task.id, unique_id));
+        let exercise_name = task.id.split_once('_').map(|(_, name)| name).unwrap_or(&task.id);
+        let sandbox_dir = env::temp_dir().join(format!("enginedge_bench_{}", unique_id)).join(exercise_name);
         if sandbox_dir.exists() {
             let _ = fs::remove_dir_all(&sandbox_dir);
         }
