@@ -85,8 +85,8 @@ enum Commands {
         #[arg(long, short)]
         dataset: Option<String>,
 
-        /// Comma-separated languages to evaluate (e.g. "rust,go,python,javascript")
-        #[arg(long, default_value = "rust,go,python,javascript")]
+        /// Comma-separated languages to evaluate (e.g. "rust,go,python,javascript,cpp,java")
+        #[arg(long, default_value = "rust,go,python,javascript,cpp,java")]
         langs: String,
 
         /// Maximum number of tasks to evaluate (sampling limit)
