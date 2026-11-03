@@ -83,6 +83,7 @@ async fn handle_request(req: JsonRpcRequest, bridge: &CloudBridge, tools: &[Tool
                         "ping" => tools::execute_ping(),
                         "echo" => tools::execute_echo(call_params.arguments.clone()),
                         "get_status" => tools::execute_get_status(),
+                        "manage_imports" => tools::execute_manage_imports(call_params.arguments),
                         "get_outline" => tools::execute_get_outline(call_params.arguments),
                         "read_symbol" => tools::execute_read_symbol(call_params.arguments),
                         "replace_symbol" => tools::execute_replace_symbol(call_params.arguments),

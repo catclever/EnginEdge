@@ -2,6 +2,7 @@ use serde_json::{json, Value};
 use std::time::{SystemTime, UNIX_EPOCH};
 use std::env;
 use std::fs;
+use ignore::WalkBuilder;
 
 use crate::protocol::*;
 use crate::ast;
@@ -163,6 +164,68 @@ pub fn execute_replace_symbol(args: Option<Value>) -> Result<CallToolResult, Jso
     })
 }
 
+pub fn manage_imports_tool_def() -> Tool {
+    Tool {
+        name: "manage_imports".to_string(),
+        description: Some("AST-aware import and reference manager across Rust, Go, Python, and TypeScript. Supports listing imports, idempotent adding/merging, and pruning dead/unused imports.".to_string()),
+        input_schema: json!({
+            "type": "object",
+            "properties": {
+                "file_path": {
+                    "type": "string",
+                    "description": "Path to the code file"
+                },
+                "action": {
+                    "type": "string",
+                    "enum": ["list", "add", "prune"],
+                    "description": "Action to perform: 'list' (view all imports), 'add' (insert or merge import), 'prune' (detect and optionally remove unused imports)"
+                },
+                "statement": {
+                    "type": "string",
+                    "description": "The import statement to add (e.g. 'use std::collections::HashMap;' or 'from collections import defaultdict'). Required for action 'add'."
+                },
+                "auto_remove": {
+                    "type": "boolean",
+                    "description": "For action 'prune', whether to automatically remove detected unused imports (default false, reporting only)"
+                }
+            },
+            "required": ["file_path", "action"]
+        }),
+    }
+}
+
+pub fn execute_manage_imports(args: Option<Value>) -> Result<CallToolResult, JsonRpcError> {
+    let args_obj = args.ok_or_else(|| JsonRpcError {
+        code: -32602,
+        message: "Missing arguments".to_string(),
+        data: None,
+    })?;
+
+    let file_path = args_obj.get("file_path").and_then(|f| f.as_str()).ok_or_else(|| JsonRpcError {
+        code: -32602,
+        message: "Missing required argument 'file_path'".to_string(),
+        data: None,
+    })?;
+
+    let action = args_obj.get("action").and_then(|a| a.as_str()).unwrap_or("list");
+    let statement = args_obj.get("statement").and_then(|s| s.as_str());
+    let auto_remove = args_obj.get("auto_remove").and_then(|r| r.as_bool());
+
+    match ast::manage_imports(file_path, action, statement, auto_remove) {
+        Ok(result) => Ok(CallToolResult {
+            content: vec![Content::Text {
+                text: result.to_string(),
+            }],
+            is_error: None,
+        }),
+        Err(e) => Err(JsonRpcError {
+            code: -32603,
+            message: format!("Failed to manage imports: {}", e),
+            data: None,
+        }),
+    }
+}
+
 // --- New Local Tools (list_files, grep_search, write_file, run_verification) ---
 
 pub fn list_files_tool_def() -> Tool {
@@ -210,7 +273,14 @@ pub fn execute_list_files(args: Option<Value>) -> Result<CallToolResult, JsonRpc
     })?;
 
     let mut files = Vec::new();
-    collect_files_recursive(&validated_dir, &cwd, 0, max_depth, &mut files)?;
+    let walker = build_ignore_walker(&validated_dir, Some(max_depth));
+    for entry in walker.build().flatten() {
+        if entry.file_type().is_some_and(|ft| ft.is_file()) && crate::security::validate_path(entry.path()).is_ok() {
+            if let Ok(rel) = entry.path().strip_prefix(&cwd) {
+                files.push(rel.to_string_lossy().to_string());
+            }
+        }
+    }
     files.sort();
 
     Ok(CallToolResult {
@@ -221,54 +291,23 @@ pub fn execute_list_files(args: Option<Value>) -> Result<CallToolResult, JsonRpc
     })
 }
 
-fn collect_files_recursive(
-    dir: &std::path::Path,
-    root: &std::path::Path,
-    depth: usize,
-    max_depth: usize,
-    files: &mut Vec<String>,
-) -> Result<(), JsonRpcError> {
-    if depth > max_depth {
-        return Ok(());
+fn build_ignore_walker(target_dir: &std::path::Path, max_depth: Option<usize>) -> WalkBuilder {
+    let mut builder = WalkBuilder::new(target_dir);
+    builder.hidden(true); // Ignore hidden files like .git
+    builder.git_ignore(true); // Respect .gitignore
+    builder.git_global(true);
+    builder.git_exclude(true);
+    builder.ignore(true); // Respect .ignore
+    if let Some(depth) = max_depth {
+        builder.max_depth(Some(depth));
     }
-
-    let entries = match std::fs::read_dir(dir) {
-        Ok(e) => e,
-        Err(e) => return Err(JsonRpcError {
-            code: -32603,
-            message: format!("Failed to read directory {}: {}", dir.display(), e),
-            data: None,
-        }),
-    };
-
-    for entry in entries.flatten() {
-        let path = entry.path();
-        let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-
-        // Skip ignored directories/files
-        if file_name.starts_with('.') && file_name != "." {
-            continue;
-        }
-        if matches!(file_name, "target" | "node_modules" | "vendor" | "build" | "dist" | "tmp" | "temp") {
-            continue;
-        }
-
-        if path.is_dir() {
-            collect_files_recursive(&path, root, depth + 1, max_depth, files)?;
-        } else if path.is_file() && crate::security::validate_path(&path).is_ok() {
-            if let Ok(rel) = path.strip_prefix(root) {
-                files.push(rel.to_string_lossy().to_string());
-            }
-        }
-    }
-
-    Ok(())
+    builder
 }
 
 pub fn grep_search_tool_def() -> Tool {
     Tool {
         name: "grep_search".to_string(),
-        description: Some("Searches for text pattern or regex across workspace files, respecting security jail".to_string()),
+        description: Some("Fast regex and text search across workspace files powered by ripgrep engine, respecting .gitignore and security jail".to_string()),
         input_schema: json!({
             "type": "object",
             "properties": {
@@ -279,6 +318,10 @@ pub fn grep_search_tool_def() -> Tool {
                 "path": {
                     "type": "string",
                     "description": "Optional subpath or file to restrict search"
+                },
+                "max_results": {
+                    "type": "integer",
+                    "description": "Maximum number of matched lines to return (default: 50, max: 200)"
                 }
             },
             "required": ["query"]
@@ -301,6 +344,11 @@ pub fn execute_grep_search(args: Option<Value>) -> Result<CallToolResult, JsonRp
             message: "Missing required argument 'query' (or 'pattern')".to_string(),
             data: None,
         })?;
+
+    let max_results = args_obj.get("max_results")
+        .and_then(|m| m.as_u64())
+        .unwrap_or(50)
+        .min(200) as usize;
 
     let regex = regex::Regex::new(query_str).map_err(|e| JsonRpcError {
         code: -32602,
@@ -326,15 +374,15 @@ pub fn execute_grep_search(args: Option<Value>) -> Result<CallToolResult, JsonRp
     let mut matches = Vec::new();
 
     if validated.is_file() {
-        search_file(&validated, &cwd, &regex, &mut matches);
+        search_file(&validated, &cwd, &regex, &mut matches, max_results);
     } else {
-        let mut file_list = Vec::new();
-        collect_files_recursive(&validated, &cwd, 0, 10, &mut file_list)?;
-        for rel in file_list {
-            let full_p = cwd.join(&rel);
-            search_file(&full_p, &cwd, &regex, &mut matches);
-            if matches.len() >= 100 {
-                break;
+        let walker = build_ignore_walker(&validated, None);
+        for entry in walker.build().flatten() {
+            if entry.file_type().is_some_and(|ft| ft.is_file()) && crate::security::validate_path(entry.path()).is_ok() {
+                search_file(entry.path(), &cwd, &regex, &mut matches, max_results);
+                if matches.len() >= max_results {
+                    break;
+                }
             }
         }
     }
@@ -358,7 +406,11 @@ fn search_file(
     root: &std::path::Path,
     regex: &regex::Regex,
     matches: &mut Vec<Value>,
+    max_results: usize,
 ) {
+    if matches.len() >= max_results {
+        return;
+    }
     if let Ok(content) = std::fs::read_to_string(file_path) {
         let rel_path = file_path.strip_prefix(root).unwrap_or(file_path).to_string_lossy().to_string();
         for (idx, line) in content.lines().enumerate() {
@@ -368,7 +420,7 @@ fn search_file(
                     "line": idx + 1,
                     "content": line.trim()
                 }));
-                if matches.len() >= 200 {
+                if matches.len() >= max_results {
                     return;
                 }
             }
@@ -880,6 +932,7 @@ pub async fn execute_local_tool_by_name(name: &str, args: Value) -> String {
         "ping" => execute_ping(),
         "echo" => execute_echo(args_opt),
         "get_status" => execute_get_status(),
+        "manage_imports" => execute_manage_imports(args_opt),
         _ => Err(JsonRpcError {
             code: -32601,
             message: format!("Unknown local tool: {}", name),
@@ -912,6 +965,7 @@ pub fn all_local_tool_schemas() -> Vec<Value> {
         ping_tool_def(),
         echo_tool_def(),
         get_status_tool_def(),
+        manage_imports_tool_def(),
     ]
     .into_iter()
     .map(|t| {
@@ -938,6 +992,7 @@ pub fn all_mcp_tools() -> Vec<Tool> {
         ping_tool_def(),
         echo_tool_def(),
         get_status_tool_def(),
+        manage_imports_tool_def(),
         survey_architecture_tool_def(),
         search_code_examples_tool_def(),
         fetch_doc_tool_def(),
@@ -962,6 +1017,7 @@ pub fn tool_by_name(name: &str) -> Option<Tool> {
         "search_code_examples" => Some(search_code_examples_tool_def()),
         "fetch_doc" => Some(fetch_doc_tool_def()),
         "inspect_spec" => Some(inspect_spec_tool_def()),
+        "manage_imports" => Some(manage_imports_tool_def()),
         _ => None,
     }
 }
@@ -969,7 +1025,7 @@ pub fn tool_by_name(name: &str) -> Option<Tool> {
 /// Computes the filtered list of MCP tools based on preset, include list, and exclude list.
 ///
 /// Presets:
-/// - "full" | "all" (default): All 15 tools
+/// - "full" | "all" (default): All 16 tools
 /// - "light" | "plugin": 9 core tools (AST + Cloud Intelligence + Telemetry/Verification)
 /// - "ast" | "ast-only": 3 AST structural manipulation tools only
 pub fn get_filtered_mcp_tools(
@@ -1179,10 +1235,10 @@ mod tests {
     #[test]
     fn test_tools_preset_full() {
         let tools = get_filtered_mcp_tools(Some("full"), None, None);
-        assert_eq!(tools.len(), 15);
+        assert_eq!(tools.len(), 16);
 
         let default_tools = get_filtered_mcp_tools(None, None, None);
-        assert_eq!(default_tools.len(), 15);
+        assert_eq!(default_tools.len(), 16);
     }
 
     #[test]

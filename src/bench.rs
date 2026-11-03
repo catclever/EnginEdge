@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tracing::warn;
@@ -409,7 +409,11 @@ pub async fn run_benchmark(options: BenchOptions) -> anyhow::Result<BenchReport>
         eprintln!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
 
         let task_start = Instant::now();
-        let sandbox_dir = env::temp_dir().join(format!("enginedge_bench_{}_{}", task.id, task_start.elapsed().as_millis()));
+        let unique_id = format!("{}_{}", std::process::id(), SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_nanos());
+        let sandbox_dir = env::temp_dir().join(format!("enginedge_bench_{}_{}", task.id, unique_id));
+        if sandbox_dir.exists() {
+            let _ = fs::remove_dir_all(&sandbox_dir);
+        }
         fs::create_dir_all(&sandbox_dir)?;
 
         // Write initial files into sandbox
