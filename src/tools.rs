@@ -537,7 +537,7 @@ pub fn execute_read_file(args: Option<Value>) -> Result<CallToolResult, JsonRpcE
 pub fn write_file_tool_def() -> Tool {
     Tool {
         name: "write_file".to_string(),
-        description: Some("Writes or updates a file atomically at the specified path within workspace".to_string()),
+        description: Some("Writes or updates a file atomically at the specified path within workspace. Supports appending.".to_string()),
         input_schema: json!({
             "type": "object",
             "properties": {
@@ -547,7 +547,11 @@ pub fn write_file_tool_def() -> Tool {
                 },
                 "content": {
                     "type": "string",
-                    "description": "Full file content to write"
+                    "description": "Full file content to write or append"
+                },
+                "append": {
+                    "type": "boolean",
+                    "description": "If true, appends content to the end of the file instead of overwriting. Defaults to false."
                 }
             },
             "required": ["path", "content"]
@@ -556,11 +560,18 @@ pub fn write_file_tool_def() -> Tool {
 }
 
 pub fn execute_write_file(args: Option<Value>) -> Result<CallToolResult, JsonRpcError> {
-    let args_obj = args.ok_or_else(|| JsonRpcError {
+    let mut args_obj = args.ok_or_else(|| JsonRpcError {
         code: -32602,
         message: "Missing arguments".to_string(),
         data: None,
     })?;
+
+    // Auto-decode if arguments arrived as a JSON string from LLM/Hub
+    if let Value::String(ref s) = args_obj {
+        if let Ok(parsed) = serde_json::from_str::<Value>(s) {
+            args_obj = parsed;
+        }
+    }
 
     let path_str = args_obj.get("path").and_then(|p| p.as_str()).ok_or_else(|| JsonRpcError {
         code: -32602,
@@ -573,6 +584,8 @@ pub fn execute_write_file(args: Option<Value>) -> Result<CallToolResult, JsonRpc
         message: "Missing required argument 'content'".to_string(),
         data: None,
     })?;
+
+    let append = args_obj.get("append").and_then(|a| a.as_bool()).unwrap_or(false);
 
     let validated = crate::security::validate_path(path_str).map_err(|e| JsonRpcError {
         code: -32602,
@@ -588,11 +601,30 @@ pub fn execute_write_file(args: Option<Value>) -> Result<CallToolResult, JsonRpc
         })?;
     }
 
-    std::fs::write(&validated, content).map_err(|e| JsonRpcError {
-        code: -32603,
-        message: format!("Failed to write file: {}", e),
-        data: None,
-    })?;
+    if append {
+        use std::io::Write;
+        let mut file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&validated)
+            .map_err(|e| JsonRpcError {
+                code: -32603,
+                message: format!("Failed to open file for append: {}", e),
+                data: None,
+            })?;
+
+        file.write_all(content.as_bytes()).map_err(|e| JsonRpcError {
+            code: -32603,
+            message: format!("Failed to append to file: {}", e),
+            data: None,
+        })?;
+    } else {
+        std::fs::write(&validated, content).map_err(|e| JsonRpcError {
+            code: -32603,
+            message: format!("Failed to write file: {}", e),
+            data: None,
+        })?;
+    }
 
     Ok(CallToolResult {
         content: vec![Content::Text {
@@ -923,7 +955,13 @@ pub async fn execute_inspect_spec(args: Option<Value>, bridge: &CloudBridge) -> 
 
 // --- Dispatchers and Schemas for Cloud / Headless Integration ---
 
-pub async fn execute_local_tool_by_name(name: &str, args: Value) -> String {
+pub async fn execute_local_tool_by_name(name: &str, mut args: Value) -> String {
+    // If args arrived as a serialized JSON string, parse it into an Object/Value
+    if let Value::String(ref s) = args {
+        if let Ok(parsed) = serde_json::from_str::<Value>(s) {
+            args = parsed;
+        }
+    }
     let args_opt = Some(args);
     let res = match name {
         "get_outline" => execute_get_outline(args_opt),
@@ -1159,6 +1197,23 @@ mod tests {
         let grep_res = execute_grep_search(Some(grep_args)).unwrap();
         let Content::Text { text: g_text } = &grep_res.content[0];
         assert!(g_text.contains("Tree-sitter AST engine"));
+
+        // append
+        let append_args = json!({
+            "path": target_path,
+            "content": "\nLine 4: Appended chunk successfully",
+            "append": true
+        });
+        let append_res = execute_write_file(Some(append_args)).unwrap();
+        let Content::Text { text: app_text } = &append_res.content[0];
+        assert!(app_text.contains("written"));
+
+        let read_args = json!({
+            "path": target_path
+        });
+        let read_res = execute_read_file(Some(read_args)).unwrap();
+        let Content::Text { text: r_text } = &read_res.content[0];
+        assert!(r_text.contains("Line 4: Appended chunk successfully"));
 
         // cleanup
         let _ = std::fs::remove_file(target_path);
