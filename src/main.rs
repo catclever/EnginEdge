@@ -112,6 +112,10 @@ enum Commands {
         /// Timeout in seconds per task
         #[arg(long, default_value = "180")]
         timeout: u64,
+
+        /// Maximum reasoning turns allowed on cloud hub per benchmark task
+        #[arg(long, default_value = "50")]
+        max_turns: usize,
     },
 }
 
@@ -189,6 +193,7 @@ async fn main() -> anyhow::Result<()> {
             profile,
             dry_run,
             timeout,
+            max_turns,
         }) => {
             let lang_list = langs
                 .split(',')
@@ -206,6 +211,7 @@ async fn main() -> anyhow::Result<()> {
                 profile,
                 dry_run,
                 timeout_secs: timeout,
+                max_turns,
             };
 
             bench::run_benchmark(options).await?;

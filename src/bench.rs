@@ -74,6 +74,7 @@ pub struct BenchOptions {
     pub profile: Option<String>,
     pub dry_run: bool,
     pub timeout_secs: u64,
+    pub max_turns: usize,
 }
 
 /// Generates the curated built-in polyglot benchmark suite (Rust, Go, Python, JavaScript)
@@ -452,6 +453,7 @@ pub async fn run_benchmark(options: BenchOptions) -> anyhow::Result<BenchReport>
                         "system_prompt": "You are EnginEdge Autonomous Agent evaluating a coding benchmark. Inspect the codebase, solve the problem by writing or replacing symbols, verify with tests, and complete the task.",
                         "llm_profile": options.profile.clone().unwrap_or_else(|| "default".to_string()),
                         "tools": tools::all_local_tool_schemas(),
+                        "max_turns": options.max_turns,
                     });
 
                     if let Err(e) = b.send_raw(init_payload.to_string()).await {
@@ -870,6 +872,7 @@ mod tests {
             profile: None,
             dry_run: true,
             timeout_secs: 5,
+            max_turns: 50,
         };
 
         let report = run_benchmark(options).await.unwrap();
