@@ -91,6 +91,7 @@ async fn handle_request(req: JsonRpcRequest, bridge: &CloudBridge, tools: &[Tool
                         "list_files" => tools::execute_list_files(call_params.arguments),
                         "grep_search" => tools::execute_grep_search(call_params.arguments),
                         "write_file" => tools::execute_write_file(call_params.arguments),
+                        "append_file" => tools::execute_append_file(call_params.arguments),
                         "run_verification" => tools::execute_run_verification(call_params.arguments),
                         "survey_architecture" => tools::execute_survey_architecture(call_params.arguments, bridge).await,
                         "search_code_examples" => tools::execute_search_code_examples(call_params.arguments, bridge).await,

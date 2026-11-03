@@ -559,6 +559,48 @@ pub fn write_file_tool_def() -> Tool {
     }
 }
 
+pub fn append_file_tool_def() -> Tool {
+    Tool {
+        name: "append_file".to_string(),
+        description: Some("Appends content to the end of a specified file within workspace. Recommended for chunked writes or adding definitions/tests to large files (>3KB) to prevent token truncation.".to_string()),
+        input_schema: json!({
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "description": "Relative file path within workspace"
+                },
+                "content": {
+                    "type": "string",
+                    "description": "Content chunk to append to the end of the file"
+                }
+            },
+            "required": ["path", "content"]
+        }),
+    }
+}
+
+pub fn execute_append_file(args: Option<Value>) -> Result<CallToolResult, JsonRpcError> {
+    let mut args_obj = args.ok_or_else(|| JsonRpcError {
+        code: -32602,
+        message: "Missing arguments".to_string(),
+        data: None,
+    })?;
+
+    // Auto-decode if arguments arrived as a JSON string from LLM/Hub
+    if let Value::String(ref s) = args_obj {
+        if let Ok(parsed) = serde_json::from_str::<Value>(s) {
+            args_obj = parsed;
+        }
+    }
+
+    if let Value::Object(ref mut map) = args_obj {
+        map.insert("append".to_string(), Value::Bool(true));
+    }
+
+    execute_write_file(Some(args_obj))
+}
+
 pub fn execute_write_file(args: Option<Value>) -> Result<CallToolResult, JsonRpcError> {
     let mut args_obj = args.ok_or_else(|| JsonRpcError {
         code: -32602,
@@ -971,6 +1013,7 @@ pub async fn execute_local_tool_by_name(name: &str, mut args: Value) -> String {
         "list_files" => execute_list_files(args_opt),
         "grep_search" => execute_grep_search(args_opt),
         "write_file" => execute_write_file(args_opt),
+        "append_file" => execute_append_file(args_opt),
         "run_verification" => execute_run_verification(args_opt),
         "ping" => execute_ping(),
         "echo" => execute_echo(args_opt),
@@ -1004,6 +1047,7 @@ pub fn all_local_tool_schemas() -> Vec<Value> {
         list_files_tool_def(),
         grep_search_tool_def(),
         write_file_tool_def(),
+        append_file_tool_def(),
         run_verification_tool_def(),
         ping_tool_def(),
         echo_tool_def(),
@@ -1031,6 +1075,7 @@ pub fn all_mcp_tools() -> Vec<Tool> {
         list_files_tool_def(),
         grep_search_tool_def(),
         write_file_tool_def(),
+        append_file_tool_def(),
         run_verification_tool_def(),
         ping_tool_def(),
         echo_tool_def(),
@@ -1052,6 +1097,7 @@ pub fn tool_by_name(name: &str) -> Option<Tool> {
         "list_files" => Some(list_files_tool_def()),
         "grep_search" => Some(grep_search_tool_def()),
         "write_file" => Some(write_file_tool_def()),
+        "append_file" => Some(append_file_tool_def()),
         "run_verification" => Some(run_verification_tool_def()),
         "ping" => Some(ping_tool_def()),
         "echo" => Some(echo_tool_def()),
@@ -1068,7 +1114,7 @@ pub fn tool_by_name(name: &str) -> Option<Tool> {
 /// Computes the filtered list of MCP tools based on preset, include list, and exclude list.
 ///
 /// Presets:
-/// - "full" | "all" (default): All 16 tools
+/// - "full" | "all" (default): All 17 tools
 /// - "light" | "plugin": 9 core tools (AST + Cloud Intelligence + Telemetry/Verification)
 /// - "ast" | "ast-only": 3 AST structural manipulation tools only
 pub fn get_filtered_mcp_tools(
@@ -1220,6 +1266,39 @@ mod tests {
     }
 
     #[test]
+    fn test_append_file_tool_execution() {
+        let target_path = "target/test_append_tool_file.txt";
+
+        // Initial write using write_file
+        let write_args = json!({
+            "path": target_path,
+            "content": "Line 1: Primary component\n"
+        });
+        let write_res = execute_write_file(Some(write_args)).unwrap();
+        assert_eq!(write_res.is_error, None);
+
+        // Append using append_file
+        let append_args = json!({
+            "path": target_path,
+            "content": "Line 2: Secondary test suite\n"
+        });
+        let append_res = execute_append_file(Some(append_args)).unwrap();
+        assert_eq!(append_res.is_error, None);
+
+        // Read and verify
+        let read_args = json!({
+            "path": target_path
+        });
+        let read_res = execute_read_file(Some(read_args)).unwrap();
+        let Content::Text { text } = &read_res.content[0];
+        assert!(text.contains("Line 1: Primary component"));
+        assert!(text.contains("Line 2: Secondary test suite"));
+
+        // Cleanup
+        let _ = std::fs::remove_file(target_path);
+    }
+
+    #[test]
     fn test_read_file_execution() {
         let args = json!({
             "path": "Cargo.toml",
@@ -1295,10 +1374,10 @@ mod tests {
     #[test]
     fn test_tools_preset_full() {
         let tools = get_filtered_mcp_tools(Some("full"), None, None);
-        assert_eq!(tools.len(), 16);
+        assert_eq!(tools.len(), 17);
 
         let default_tools = get_filtered_mcp_tools(None, None, None);
-        assert_eq!(default_tools.len(), 16);
+        assert_eq!(default_tools.len(), 17);
     }
 
     #[test]
@@ -1310,6 +1389,7 @@ mod tests {
         let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
         assert!(!names.contains(&"read_file"));
         assert!(!names.contains(&"write_file"));
+        assert!(!names.contains(&"append_file"));
         assert!(!names.contains(&"list_files"));
         assert!(!names.contains(&"grep_search"));
         assert!(!names.contains(&"ping"));

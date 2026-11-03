@@ -36,7 +36,7 @@ struct Cli {
     #[arg(long, env = "ENGINEDGE_MAX_WEIGHT")]
     max_weight: Option<u32>,
 
-    /// Tools preset for MCP server: "full" (all 15 tools), "light" / "plugin" (AST + Cloud + Telemetry, 9 tools), "ast" / "ast-only" (3 tools)
+    /// Tools preset for MCP server: "full" (all 17 tools), "light" / "plugin" (AST + Cloud + Telemetry, 9 tools), "ast" / "ast-only" (3 tools)
     #[arg(long, env = "ENGINEDGE_TOOLS_PRESET")]
     preset: Option<String>,
 
@@ -78,6 +78,10 @@ enum Commands {
         /// LLM profile name on cloud hub
         #[arg(long)]
         profile: Option<String>,
+
+        /// Maximum reasoning turns allowed on cloud hub (default: 50)
+        #[arg(long, default_value = "50")]
+        max_turns: usize,
     },
     /// Run automated coding benchmark evaluations against datasets
     Bench {
@@ -181,8 +185,8 @@ async fn main() -> anyhow::Result<()> {
             );
             server::run_stdio_server(bridge, tools).await?;
         }
-        Some(Commands::Run { task, system_prompt, profile }) => {
-            run_headless_agent(bridge, task, system_prompt, profile).await?;
+        Some(Commands::Run { task, system_prompt, profile, max_turns }) => {
+            run_headless_agent(bridge, task, system_prompt, profile, max_turns).await?;
         }
         Some(Commands::Bench {
             dataset,
@@ -226,6 +230,7 @@ async fn run_headless_agent(
     task: String,
     system_prompt: Option<String>,
     profile: Option<String>,
+    max_turns: usize,
 ) -> anyhow::Result<()> {
     eprintln!("🚀 [EnginEdge] Initializing headless autonomous agent...");
     eprintln!("📡 [EnginEdge] Connecting to Cloud Bridge at Railway...");
@@ -236,9 +241,10 @@ async fn run_headless_agent(
     eprintln!("✅ [EnginEdge] Connected to Cloud Bridge!");
 
     let default_system_prompt = "You are EnginEdge Autonomous Agent, an ultra-fast edge coding assistant. \
-        You have local workspace tools (list_files, read_file, grep_search, write_file, run_verification, get_outline, read_symbol, replace_symbol) \
+        You have local workspace tools (list_files, read_file, grep_search, write_file, append_file, run_verification, get_outline, read_symbol, replace_symbol) \
         and cloud intelligence tools (github_repo_survey, github_code_search, doc_fetcher, spec_inspector, knowledge_store). \
-        Inspect the codebase, think step-by-step, make necessary edits, verify your work using tests or builds, and report final results.".to_string();
+        Inspect the codebase, think step-by-step, make necessary edits, verify your work using tests or builds, and report final results. \
+        For long implementations or files (>3KB), avoid single-call giant writes that risk token truncation; write the initial skeleton and split implementation chunks using 'append_file' or replace symbols iteratively with 'replace_symbol'.".to_string();
 
     let init_payload = json!({
         "type": "init",
@@ -247,6 +253,7 @@ async fn run_headless_agent(
         "system_prompt": system_prompt.unwrap_or(default_system_prompt),
         "llm_profile": profile.unwrap_or_else(|| "default".to_string()),
         "tools": tools::all_local_tool_schemas(),
+        "max_turns": max_turns,
     });
 
     let mut event_rx = bridge.subscribe_events();
