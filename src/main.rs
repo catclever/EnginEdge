@@ -13,6 +13,7 @@ mod tools;
 mod security;
 pub mod policy;
 pub mod bench;
+pub mod knowledge;
 
 const DEFAULT_HUB_URL: &str = "wss://dalembert-production.up.railway.app";
 
@@ -47,13 +48,17 @@ struct Cli {
     /// Comma-separated list of tools to forcefully exclude from MCP
     #[arg(long)]
     exclude: Option<String>,
+
+    /// Enable the knowledge engine
+    #[arg(long, env = "ENGINEDGE_ENABLE_KB", default_value_t = false)]
+    enable_kb: bool,
 }
 
 #[derive(Subcommand)]
 enum Commands {
     /// Start the MCP stdio server (default)
     Mcp {
-        /// Tools preset: "full", "light" / "plugin", "ast" / "ast-only"
+        /// Tools preset: "full", "light" / "plugin", "ast" / "ast-only", "kb"
         #[arg(long)]
         preset: Option<String>,
 
@@ -64,6 +69,10 @@ enum Commands {
         /// Comma-separated list of tools to exclude
         #[arg(long)]
         exclude: Option<String>,
+
+        /// Enable the knowledge engine
+        #[arg(long, env = "ENGINEDGE_ENABLE_KB", default_value_t = false)]
+        enable_kb: bool,
     },
     /// Run headless autonomous coding agent
     Run {
@@ -148,36 +157,41 @@ async fn main() -> anyhow::Result<()> {
     bridge.start();
 
     match cli.command {
-        Some(Commands::Mcp { preset, include, exclude }) => {
+        Some(Commands::Mcp { preset, include, exclude, enable_kb }) => {
             let effective_preset = preset.or(cli.preset).unwrap_or_else(|| "full".to_string());
             let effective_include = include.or(cli.include);
             let effective_exclude = exclude.or(cli.exclude);
+            let effective_enable_kb = enable_kb || cli.enable_kb;
 
             tracing::info!(
-                "Starting EnginEdge MCP stdio server (preset: {}, include: {:?}, exclude: {:?})...",
+                "Starting EnginEdge MCP stdio server (preset: {}, include: {:?}, exclude: {:?}, kb: {})...",
                 effective_preset,
                 effective_include,
-                effective_exclude
+                effective_exclude,
+                effective_enable_kb
             );
             let tools = tools::get_filtered_mcp_tools(
                 Some(&effective_preset),
                 effective_include.as_deref(),
                 effective_exclude.as_deref(),
+                effective_enable_kb,
             );
             server::run_stdio_server(bridge, tools).await?;
         }
         None => {
             let effective_preset = cli.preset.unwrap_or_else(|| "full".to_string());
             tracing::info!(
-                "Starting EnginEdge MCP stdio server (default mode, preset: {}, include: {:?}, exclude: {:?})...",
+                "Starting EnginEdge MCP stdio server (default mode, preset: {}, include: {:?}, exclude: {:?}, kb: {})...",
                 effective_preset,
                 cli.include,
-                cli.exclude
+                cli.exclude,
+                cli.enable_kb
             );
             let tools = tools::get_filtered_mcp_tools(
                 Some(&effective_preset),
                 cli.include.as_deref(),
                 cli.exclude.as_deref(),
+                cli.enable_kb,
             );
             server::run_stdio_server(bridge, tools).await?;
         }
@@ -235,10 +249,24 @@ async fn run_headless_agent(
     }
     eprintln!("✅ [EnginEdge] Connected to Cloud Bridge!");
 
-    let default_system_prompt = "You are EnginEdge Autonomous Agent, an ultra-fast edge coding assistant. \
+    let mut default_system_prompt = "You are EnginEdge Autonomous Agent, an ultra-fast edge coding assistant. \
         You have local workspace tools (list_files, read_file, grep_search, write_file, run_verification, get_outline, read_symbol, replace_symbol) \
         and cloud intelligence tools (github_repo_survey, github_code_search, doc_fetcher, spec_inspector, knowledge_store). \
         Inspect the codebase, think step-by-step, make necessary edits, verify your work using tests or builds, and report final results.".to_string();
+
+    let kb_summaries = knowledge::get_kb_summaries();
+    let mut kb_enabled = false;
+
+    if kb_summaries.active_summary.is_some() || kb_summaries.grave_summary.is_some() {
+        kb_enabled = true;
+        default_system_prompt.push_str("\n\nPROJECT KNOWLEDGE BASE:\n");
+        if let Some(active) = kb_summaries.active_summary {
+            default_system_prompt.push_str(&format!("\nActive Knowledge:\n{}\n", active));
+        }
+        if let Some(grave) = kb_summaries.grave_summary {
+            default_system_prompt.push_str(&format!("\nGraveyard (Anti-patterns):\n{}\n", grave));
+        }
+    }
 
     let init_payload = json!({
         "type": "init",
@@ -246,7 +274,7 @@ async fn run_headless_agent(
         "prompt": task,
         "system_prompt": system_prompt.unwrap_or(default_system_prompt),
         "llm_profile": profile.unwrap_or_else(|| "default".to_string()),
-        "tools": tools::all_local_tool_schemas(),
+        "tools": tools::all_local_tool_schemas(kb_enabled),
     });
 
     let mut event_rx = bridge.subscribe_events();

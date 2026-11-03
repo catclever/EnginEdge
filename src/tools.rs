@@ -995,8 +995,8 @@ pub async fn execute_local_tool_by_name(name: &str, mut args: Value) -> String {
     }
 }
 
-pub fn all_local_tool_schemas() -> Vec<Value> {
-    vec![
+pub fn all_local_tool_schemas(enable_kb: bool) -> Vec<Value> {
+    let mut tools = vec![
         get_outline_tool_def(),
         read_symbol_tool_def(),
         replace_symbol_tool_def(),
@@ -1009,7 +1009,16 @@ pub fn all_local_tool_schemas() -> Vec<Value> {
         echo_tool_def(),
         get_status_tool_def(),
         manage_imports_tool_def(),
-    ]
+    ];
+
+    if enable_kb {
+        tools.push(get_kb_search_tool_def());
+        tools.push(get_kb_read_tool_def());
+        tools.push(get_kb_record_tool_def());
+        tools.push(get_kb_audit_tool_def());
+    }
+
+    tools
     .into_iter()
     .map(|t| {
         json!({
@@ -1022,8 +1031,8 @@ pub fn all_local_tool_schemas() -> Vec<Value> {
     .collect()
 }
 
-pub fn all_mcp_tools() -> Vec<Tool> {
-    vec![
+pub fn all_mcp_tools(enable_kb: bool) -> Vec<Tool> {
+    let mut tools = vec![
         get_outline_tool_def(),
         read_symbol_tool_def(),
         replace_symbol_tool_def(),
@@ -1040,7 +1049,16 @@ pub fn all_mcp_tools() -> Vec<Tool> {
         search_code_examples_tool_def(),
         fetch_doc_tool_def(),
         inspect_spec_tool_def(),
-    ]
+    ];
+
+    if enable_kb {
+        tools.push(get_kb_search_tool_def());
+        tools.push(get_kb_read_tool_def());
+        tools.push(get_kb_record_tool_def());
+        tools.push(get_kb_audit_tool_def());
+    }
+
+    tools
 }
 
 pub fn tool_by_name(name: &str) -> Option<Tool> {
@@ -1061,6 +1079,10 @@ pub fn tool_by_name(name: &str) -> Option<Tool> {
         "fetch_doc" => Some(fetch_doc_tool_def()),
         "inspect_spec" => Some(inspect_spec_tool_def()),
         "manage_imports" => Some(manage_imports_tool_def()),
+        "kb_search" => Some(get_kb_search_tool_def()),
+        "kb_read" => Some(get_kb_read_tool_def()),
+        "kb_record" => Some(get_kb_record_tool_def()),
+        "kb_audit" => Some(get_kb_audit_tool_def()),
         _ => None,
     }
 }
@@ -1075,6 +1097,7 @@ pub fn get_filtered_mcp_tools(
     preset: Option<&str>,
     include: Option<&str>,
     exclude: Option<&str>,
+    enable_kb: bool,
 ) -> Vec<Tool> {
     let preset_norm = preset
         .map(|s| s.trim().to_lowercase())
@@ -1098,8 +1121,21 @@ pub fn get_filtered_mcp_tools(
             read_symbol_tool_def(),
             replace_symbol_tool_def(),
         ],
-        _ => all_mcp_tools(),
+        "kb" | "knowledge" => vec![
+            get_kb_search_tool_def(),
+            get_kb_read_tool_def(),
+            get_kb_record_tool_def(),
+            get_kb_audit_tool_def(),
+        ],
+        _ => all_mcp_tools(enable_kb),
     };
+
+    if enable_kb && preset_norm != "kb" && preset_norm != "knowledge" && preset_norm != "full" {
+        tools.push(get_kb_search_tool_def());
+        tools.push(get_kb_read_tool_def());
+        tools.push(get_kb_record_tool_def());
+        tools.push(get_kb_audit_tool_def());
+    }
 
     // Apply include (force add tool if not already present)
     if let Some(inc_str) = include {
@@ -1294,16 +1330,16 @@ mod tests {
 
     #[test]
     fn test_tools_preset_full() {
-        let tools = get_filtered_mcp_tools(Some("full"), None, None);
+        let tools = get_filtered_mcp_tools(Some("full"), None, None, false);
         assert_eq!(tools.len(), 16);
 
-        let default_tools = get_filtered_mcp_tools(None, None, None);
+        let default_tools = get_filtered_mcp_tools(None, None, None, false);
         assert_eq!(default_tools.len(), 16);
     }
 
     #[test]
     fn test_tools_preset_light() {
-        let tools = get_filtered_mcp_tools(Some("light"), None, None);
+        let tools = get_filtered_mcp_tools(Some("light"), None, None, false);
         assert_eq!(tools.len(), 9);
 
         // Verify duplicates and overlaps are stripped
@@ -1326,7 +1362,7 @@ mod tests {
 
     #[test]
     fn test_tools_preset_ast_only() {
-        let tools = get_filtered_mcp_tools(Some("ast-only"), None, None);
+        let tools = get_filtered_mcp_tools(Some("ast-only"), None, None, false);
         assert_eq!(tools.len(), 3);
         let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
         assert_eq!(names, vec!["get_outline", "read_symbol", "replace_symbol"]);
@@ -1335,23 +1371,208 @@ mod tests {
     #[test]
     fn test_tools_preset_light_with_include_and_exclude() {
         // Include read_file into light preset
-        let tools_with_inc = get_filtered_mcp_tools(Some("light"), Some("read_file"), None);
+        let tools_with_inc = get_filtered_mcp_tools(Some("light"), Some("read_file"), None, false);
         assert_eq!(tools_with_inc.len(), 10);
         let names_inc: Vec<&str> = tools_with_inc.iter().map(|t| t.name.as_str()).collect();
         assert!(names_inc.contains(&"read_file"));
 
         // Exclude run_verification from light preset
-        let tools_with_exc = get_filtered_mcp_tools(Some("light"), None, Some("run_verification"));
+        let tools_with_exc = get_filtered_mcp_tools(Some("light"), None, Some("run_verification"), false);
         assert_eq!(tools_with_exc.len(), 8);
         let names_exc: Vec<&str> = tools_with_exc.iter().map(|t| t.name.as_str()).collect();
         assert!(!names_exc.contains(&"run_verification"));
 
         // Combined include & exclude
-        let tools_combined = get_filtered_mcp_tools(Some("light"), Some("ping,echo"), Some("survey_architecture"));
+        let tools_combined = get_filtered_mcp_tools(Some("light"), Some("ping,echo"), Some("survey_architecture"), false);
         let names_comb: Vec<&str> = tools_combined.iter().map(|t| t.name.as_str()).collect();
         assert_eq!(names_comb.len(), 10); // 9 + 2 - 1 = 10
         assert!(names_comb.contains(&"ping"));
         assert!(names_comb.contains(&"echo"));
         assert!(!names_comb.contains(&"survey_architecture"));
     }
+}
+
+pub fn get_kb_search_tool_def() -> Tool {
+    Tool {
+        name: "kb_search".to_string(),
+        description: Some("Search the project's knowledge base and anti-pattern graveyard.".to_string()),
+        input_schema: json!({
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "The search query."
+                },
+                "scope": {
+                    "type": "string",
+                    "description": "Optional. Scope to search. One of 'active', 'grave', or 'all'. Defaults to 'all'."
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Optional. Maximum number of results to return. Defaults to 5."
+                }
+            },
+            "required": ["query"]
+        })
+    }
+}
+
+pub fn get_kb_read_tool_def() -> Tool {
+    Tool {
+        name: "kb_read".to_string(),
+        description: Some("Reads a document from the project's knowledge base.".to_string()),
+        input_schema: json!({
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "description": "The path to the document, relative to the kb/ directory (e.g. 'graveyard/grave.md')."
+                }
+            },
+            "required": ["path"]
+        })
+    }
+}
+
+pub fn get_kb_record_tool_def() -> Tool {
+    Tool {
+        name: "kb_record".to_string(),
+        description: Some("Records a new document to the knowledge base or graveyard.".to_string()),
+        input_schema: json!({
+            "type": "object",
+            "properties": {
+                "scope": {
+                    "type": "string",
+                    "description": "Scope of the document. One of 'active' (default) or 'grave'."
+                },
+                "title": {
+                    "type": "string",
+                    "description": "Title of the document."
+                },
+                "summary": {
+                    "type": "string",
+                    "description": "Brief summary of the document."
+                },
+                "content": {
+                    "type": "string",
+                    "description": "The markdown content to record."
+                }
+            },
+            "required": ["title", "summary", "content"]
+        })
+    }
+}
+
+pub fn get_kb_audit_tool_def() -> Tool {
+    Tool {
+        name: "kb_audit".to_string(),
+        description: Some("Audits a technical proposal against known anti-patterns in the graveyard.".to_string()),
+        input_schema: json!({
+            "type": "object",
+            "properties": {
+                "proposal": {
+                    "type": "string",
+                    "description": "The technical proposal text to audit."
+                }
+            },
+            "required": ["proposal"]
+        })
+    }
+}
+
+pub fn execute_kb_search(args: Value) -> Result<CallToolResult, JsonRpcError> {
+    let query = args.get("query")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| JsonRpcError {
+            code: -32602,
+            message: "Missing required parameter: query".to_string(),
+            data: None,
+        })?;
+
+    let scope = args.get("scope").and_then(|v| v.as_str());
+    let limit = args.get("limit")
+        .and_then(|v| v.as_u64())
+        .map(|v| v as usize)
+        .unwrap_or(5);
+
+    let result = crate::knowledge::kb_search(query, scope, limit)
+        .map_err(|e| JsonRpcError {
+            code: -32000,
+            message: format!("Error: {}", e),
+            data: None,
+        })?;
+
+    Ok(CallToolResult {
+        content: vec![Content::Text {
+            text: result,
+        }],
+        is_error: Some(false),
+    })
+}
+
+pub fn execute_kb_read(args: Value) -> Result<CallToolResult, JsonRpcError> {
+    let path = args.get("path")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| JsonRpcError {
+            code: -32602,
+            message: "Missing required parameter: path".to_string(),
+            data: None,
+        })?;
+
+    let result = crate::knowledge::kb_read(path)
+        .unwrap_or_else(|e| format!("Error: {}", e));
+
+    Ok(CallToolResult {
+        content: vec![Content::Text {
+            text: result,
+        }],
+        is_error: Some(false),
+    })
+}
+
+pub fn execute_kb_record(args: Value) -> Result<CallToolResult, JsonRpcError> {
+    let scope = args.get("scope").and_then(|v| v.as_str()).unwrap_or("active");
+    let title = args.get("title").and_then(|v| v.as_str()).ok_or_else(|| JsonRpcError {
+        code: -32602,
+        message: "Missing required parameter: title".to_string(),
+        data: None,
+    })?;
+    let summary = args.get("summary").and_then(|v| v.as_str()).ok_or_else(|| JsonRpcError {
+        code: -32602,
+        message: "Missing required parameter: summary".to_string(),
+        data: None,
+    })?;
+    let content = args.get("content").and_then(|v| v.as_str()).ok_or_else(|| JsonRpcError {
+        code: -32602,
+        message: "Missing required parameter: content".to_string(),
+        data: None,
+    })?;
+
+    let result = crate::knowledge::kb_record(scope, title, summary, content)
+        .unwrap_or_else(|e| format!("Error: {}", e));
+
+    Ok(CallToolResult {
+        content: vec![Content::Text {
+            text: result,
+        }],
+        is_error: Some(false),
+    })
+}
+
+pub fn execute_kb_audit(args: Value) -> Result<CallToolResult, JsonRpcError> {
+    let proposal = args.get("proposal").and_then(|v| v.as_str()).ok_or_else(|| JsonRpcError {
+        code: -32602,
+        message: "Missing required parameter: proposal".to_string(),
+        data: None,
+    })?;
+
+    let result = crate::knowledge::kb_audit(proposal)
+        .unwrap_or_else(|e| format!("Error: {}", e));
+
+    Ok(CallToolResult {
+        content: vec![Content::Text {
+            text: result,
+        }],
+        is_error: Some(false),
+    })
 }
