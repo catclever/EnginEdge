@@ -1161,6 +1161,194 @@ pub fn get_filtered_mcp_tools(
     tools
 }
 
+
+
+pub fn get_kb_search_tool_def() -> Tool {
+    Tool {
+        name: "kb_search".to_string(),
+        description: Some("Search the project's knowledge base and anti-pattern graveyard.".to_string()),
+        input_schema: json!({
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "The search query."
+                },
+                "scope": {
+                    "type": "string",
+                    "description": "Optional. Scope to search. One of 'active', 'grave', or 'all'. Defaults to 'all'."
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Optional. Maximum number of results to return. Defaults to 5."
+                }
+            },
+            "required": ["query"]
+        })
+    }
+}
+
+pub fn get_kb_read_tool_def() -> Tool {
+    Tool {
+        name: "kb_read".to_string(),
+        description: Some("Reads a document from the project's knowledge base.".to_string()),
+        input_schema: json!({
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "description": "The path to the document, relative to the kb/ directory (e.g. 'graveyard/grave.md')."
+                }
+            },
+            "required": ["path"]
+        })
+    }
+}
+
+pub fn get_kb_record_tool_def() -> Tool {
+    Tool {
+        name: "kb_record".to_string(),
+        description: Some("Records a new document to the knowledge base or graveyard.".to_string()),
+        input_schema: json!({
+            "type": "object",
+            "properties": {
+                "scope": {
+                    "type": "string",
+                    "description": "Scope of the document. One of 'active' (default) or 'grave'."
+                },
+                "title": {
+                    "type": "string",
+                    "description": "Title of the document."
+                },
+                "summary": {
+                    "type": "string",
+                    "description": "Brief summary of the document."
+                },
+                "content": {
+                    "type": "string",
+                    "description": "The markdown content to record."
+                }
+            },
+            "required": ["title", "summary", "content"]
+        })
+    }
+}
+
+pub fn get_kb_audit_tool_def() -> Tool {
+    Tool {
+        name: "kb_audit".to_string(),
+        description: Some("Audits a technical proposal against known anti-patterns in the graveyard.".to_string()),
+        input_schema: json!({
+            "type": "object",
+            "properties": {
+                "proposal": {
+                    "type": "string",
+                    "description": "The technical proposal text to audit."
+                }
+            },
+            "required": ["proposal"]
+        })
+    }
+}
+
+pub fn execute_kb_search(args: Value) -> Result<CallToolResult, JsonRpcError> {
+    let query = args.get("query")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| JsonRpcError {
+            code: -32602,
+            message: "Missing required parameter: query".to_string(),
+            data: None,
+        })?;
+
+    let scope = args.get("scope").and_then(|v| v.as_str());
+    let limit = args.get("limit")
+        .and_then(|v| v.as_u64())
+        .map(|v| v as usize)
+        .unwrap_or(5);
+
+    let result = crate::knowledge::kb_search(query, scope, limit)
+        .map_err(|e| JsonRpcError {
+            code: -32000,
+            message: format!("Error: {}", e),
+            data: None,
+        })?;
+
+    Ok(CallToolResult {
+        content: vec![Content::Text {
+            text: result,
+        }],
+        is_error: Some(false),
+    })
+}
+
+pub fn execute_kb_read(args: Value) -> Result<CallToolResult, JsonRpcError> {
+    let path = args.get("path")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| JsonRpcError {
+            code: -32602,
+            message: "Missing required parameter: path".to_string(),
+            data: None,
+        })?;
+
+    let result = crate::knowledge::kb_read(path)
+        .unwrap_or_else(|e| format!("Error: {}", e));
+
+    Ok(CallToolResult {
+        content: vec![Content::Text {
+            text: result,
+        }],
+        is_error: Some(false),
+    })
+}
+
+pub fn execute_kb_record(args: Value) -> Result<CallToolResult, JsonRpcError> {
+    let scope = args.get("scope").and_then(|v| v.as_str()).unwrap_or("active");
+    let title = args.get("title").and_then(|v| v.as_str()).ok_or_else(|| JsonRpcError {
+        code: -32602,
+        message: "Missing required parameter: title".to_string(),
+        data: None,
+    })?;
+    let summary = args.get("summary").and_then(|v| v.as_str()).ok_or_else(|| JsonRpcError {
+        code: -32602,
+        message: "Missing required parameter: summary".to_string(),
+        data: None,
+    })?;
+    let content = args.get("content").and_then(|v| v.as_str()).ok_or_else(|| JsonRpcError {
+        code: -32602,
+        message: "Missing required parameter: content".to_string(),
+        data: None,
+    })?;
+
+    let result = crate::knowledge::kb_record(scope, title, summary, content)
+        .unwrap_or_else(|e| format!("Error: {}", e));
+
+    Ok(CallToolResult {
+        content: vec![Content::Text {
+            text: result,
+        }],
+        is_error: Some(false),
+    })
+}
+
+pub fn execute_kb_audit(args: Value) -> Result<CallToolResult, JsonRpcError> {
+    let proposal = args.get("proposal").and_then(|v| v.as_str()).ok_or_else(|| JsonRpcError {
+        code: -32602,
+        message: "Missing required parameter: proposal".to_string(),
+        data: None,
+    })?;
+
+    let result = crate::knowledge::kb_audit(proposal)
+        .unwrap_or_else(|e| format!("Error: {}", e));
+
+    Ok(CallToolResult {
+        content: vec![Content::Text {
+            text: result,
+        }],
+        is_error: Some(false),
+    })
+}
+
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1390,189 +1578,4 @@ mod tests {
         assert!(names_comb.contains(&"echo"));
         assert!(!names_comb.contains(&"survey_architecture"));
     }
-}
-
-pub fn get_kb_search_tool_def() -> Tool {
-    Tool {
-        name: "kb_search".to_string(),
-        description: Some("Search the project's knowledge base and anti-pattern graveyard.".to_string()),
-        input_schema: json!({
-            "type": "object",
-            "properties": {
-                "query": {
-                    "type": "string",
-                    "description": "The search query."
-                },
-                "scope": {
-                    "type": "string",
-                    "description": "Optional. Scope to search. One of 'active', 'grave', or 'all'. Defaults to 'all'."
-                },
-                "limit": {
-                    "type": "integer",
-                    "description": "Optional. Maximum number of results to return. Defaults to 5."
-                }
-            },
-            "required": ["query"]
-        })
-    }
-}
-
-pub fn get_kb_read_tool_def() -> Tool {
-    Tool {
-        name: "kb_read".to_string(),
-        description: Some("Reads a document from the project's knowledge base.".to_string()),
-        input_schema: json!({
-            "type": "object",
-            "properties": {
-                "path": {
-                    "type": "string",
-                    "description": "The path to the document, relative to the kb/ directory (e.g. 'graveyard/grave.md')."
-                }
-            },
-            "required": ["path"]
-        })
-    }
-}
-
-pub fn get_kb_record_tool_def() -> Tool {
-    Tool {
-        name: "kb_record".to_string(),
-        description: Some("Records a new document to the knowledge base or graveyard.".to_string()),
-        input_schema: json!({
-            "type": "object",
-            "properties": {
-                "scope": {
-                    "type": "string",
-                    "description": "Scope of the document. One of 'active' (default) or 'grave'."
-                },
-                "title": {
-                    "type": "string",
-                    "description": "Title of the document."
-                },
-                "summary": {
-                    "type": "string",
-                    "description": "Brief summary of the document."
-                },
-                "content": {
-                    "type": "string",
-                    "description": "The markdown content to record."
-                }
-            },
-            "required": ["title", "summary", "content"]
-        })
-    }
-}
-
-pub fn get_kb_audit_tool_def() -> Tool {
-    Tool {
-        name: "kb_audit".to_string(),
-        description: Some("Audits a technical proposal against known anti-patterns in the graveyard.".to_string()),
-        input_schema: json!({
-            "type": "object",
-            "properties": {
-                "proposal": {
-                    "type": "string",
-                    "description": "The technical proposal text to audit."
-                }
-            },
-            "required": ["proposal"]
-        })
-    }
-}
-
-pub fn execute_kb_search(args: Value) -> Result<CallToolResult, JsonRpcError> {
-    let query = args.get("query")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| JsonRpcError {
-            code: -32602,
-            message: "Missing required parameter: query".to_string(),
-            data: None,
-        })?;
-
-    let scope = args.get("scope").and_then(|v| v.as_str());
-    let limit = args.get("limit")
-        .and_then(|v| v.as_u64())
-        .map(|v| v as usize)
-        .unwrap_or(5);
-
-    let result = crate::knowledge::kb_search(query, scope, limit)
-        .map_err(|e| JsonRpcError {
-            code: -32000,
-            message: format!("Error: {}", e),
-            data: None,
-        })?;
-
-    Ok(CallToolResult {
-        content: vec![Content::Text {
-            text: result,
-        }],
-        is_error: Some(false),
-    })
-}
-
-pub fn execute_kb_read(args: Value) -> Result<CallToolResult, JsonRpcError> {
-    let path = args.get("path")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| JsonRpcError {
-            code: -32602,
-            message: "Missing required parameter: path".to_string(),
-            data: None,
-        })?;
-
-    let result = crate::knowledge::kb_read(path)
-        .unwrap_or_else(|e| format!("Error: {}", e));
-
-    Ok(CallToolResult {
-        content: vec![Content::Text {
-            text: result,
-        }],
-        is_error: Some(false),
-    })
-}
-
-pub fn execute_kb_record(args: Value) -> Result<CallToolResult, JsonRpcError> {
-    let scope = args.get("scope").and_then(|v| v.as_str()).unwrap_or("active");
-    let title = args.get("title").and_then(|v| v.as_str()).ok_or_else(|| JsonRpcError {
-        code: -32602,
-        message: "Missing required parameter: title".to_string(),
-        data: None,
-    })?;
-    let summary = args.get("summary").and_then(|v| v.as_str()).ok_or_else(|| JsonRpcError {
-        code: -32602,
-        message: "Missing required parameter: summary".to_string(),
-        data: None,
-    })?;
-    let content = args.get("content").and_then(|v| v.as_str()).ok_or_else(|| JsonRpcError {
-        code: -32602,
-        message: "Missing required parameter: content".to_string(),
-        data: None,
-    })?;
-
-    let result = crate::knowledge::kb_record(scope, title, summary, content)
-        .unwrap_or_else(|e| format!("Error: {}", e));
-
-    Ok(CallToolResult {
-        content: vec![Content::Text {
-            text: result,
-        }],
-        is_error: Some(false),
-    })
-}
-
-pub fn execute_kb_audit(args: Value) -> Result<CallToolResult, JsonRpcError> {
-    let proposal = args.get("proposal").and_then(|v| v.as_str()).ok_or_else(|| JsonRpcError {
-        code: -32602,
-        message: "Missing required parameter: proposal".to_string(),
-        data: None,
-    })?;
-
-    let result = crate::knowledge::kb_audit(proposal)
-        .unwrap_or_else(|e| format!("Error: {}", e));
-
-    Ok(CallToolResult {
-        content: vec![Content::Text {
-            text: result,
-        }],
-        is_error: Some(false),
-    })
 }
