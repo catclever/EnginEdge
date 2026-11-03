@@ -628,31 +628,55 @@ fn cleanup_host_bench_junk() {
 }
 
 fn grade_task(verify_command: &str, working_dir: &Path) -> (bool, String, String) {
-    let tokens: Vec<&str> = verify_command.split_whitespace().collect();
-    if tokens.is_empty() {
+    let sub_commands: Vec<&str> = verify_command.split("&&").map(|s| s.trim()).filter(|s| !s.is_empty()).collect();
+    if sub_commands.is_empty() {
         return (false, String::new(), "Empty verify command".to_string());
     }
 
-    let program = tokens[0];
-    let mut cleaned_args: Vec<String> = tokens[1..]
-        .iter()
-        .map(|t| t.trim_matches('\'').trim_matches('"').to_string())
-        .collect();
+    let mut combined_stdout = String::new();
+    let mut combined_stderr = String::new();
 
-    // Auto-inject 30s timeout for Go tests to prevent infinite channel deadlocks
-    if program == "go" && tokens.get(1) == Some(&"test") && !tokens.iter().any(|t| t.starts_with("-timeout")) {
-        cleaned_args.insert(1, "-timeout=30s".to_string());
-    }
-
-    match std::process::Command::new(program).current_dir(working_dir).args(&cleaned_args).output() {
-        Ok(output) => {
-            let passed = output.status.success();
-            let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-            let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-            (passed, stdout, stderr)
+    for sub_cmd in sub_commands {
+        let tokens: Vec<&str> = sub_cmd.split_whitespace().collect();
+        if tokens.is_empty() {
+            continue;
         }
-        Err(e) => (false, String::new(), format!("Failed to spawn verify command '{}': {}", verify_command, e)),
+
+        let program = tokens[0];
+        let mut cleaned_args: Vec<String> = tokens[1..]
+            .iter()
+            .map(|t| t.trim_matches('\'').trim_matches('"').to_string())
+            .collect();
+
+        // Auto-inject 30s timeout for Go tests to prevent infinite channel deadlocks
+        if program == "go" && tokens.get(1) == Some(&"test") && !tokens.iter().any(|t| t.starts_with("-timeout")) {
+            cleaned_args.insert(1, "-timeout=30s".to_string());
+        }
+
+        match std::process::Command::new(program).current_dir(working_dir).args(&cleaned_args).output() {
+            Ok(output) => {
+                let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+                let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+                if !combined_stdout.is_empty() && !stdout.is_empty() {
+                    combined_stdout.push('\n');
+                }
+                combined_stdout.push_str(&stdout);
+                if !combined_stderr.is_empty() && !stderr.is_empty() {
+                    combined_stderr.push('\n');
+                }
+                combined_stderr.push_str(&stderr);
+
+                if !output.status.success() {
+                    return (false, combined_stdout, combined_stderr);
+                }
+            }
+            Err(e) => {
+                return (false, combined_stdout, format!("Failed to spawn verify command '{}': {}", sub_cmd, e));
+            }
+        }
     }
+
+    (true, combined_stdout, combined_stderr)
 }
 
 fn compile_report(results: Vec<TaskResult>, total_duration_ms: u128) -> BenchReport {
