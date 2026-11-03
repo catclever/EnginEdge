@@ -385,6 +385,9 @@ pub async fn run_benchmark(options: BenchOptions) -> anyhow::Result<BenchReport>
     eprintln!("📋 [EnginEdge Bench] Languages: {:?}", allowed_langs);
     eprintln!("🛡️ [EnginEdge Bench] Active Policy: {}\n", policy::get_policy_summary());
 
+    // Clean up any leftover host sandboxes or build caches before starting
+    cleanup_host_bench_junk();
+
     let mut task_results = Vec::new();
     let overall_start = Instant::now();
 
@@ -589,10 +592,39 @@ pub async fn run_benchmark(options: BenchOptions) -> anyhow::Result<BenchReport>
         let _ = fs::remove_dir_all(&sandbox_dir);
     }
 
+    // Final sweep of host sandbox junk
+    cleanup_host_bench_junk();
+
     let report = compile_report(task_results, overall_start.elapsed().as_millis());
     write_report(&report, &abs_output_path)?;
 
     Ok(report)
+}
+
+fn cleanup_host_bench_junk() {
+    let temp = env::temp_dir();
+    let mut cleaned_sandboxes = 0;
+    let mut cleaned_caches = 0;
+
+    if let Ok(entries) = fs::read_dir(&temp) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                if name.starts_with("enginedge_bench_") && fs::remove_dir_all(&path).is_ok() {
+                    cleaned_sandboxes += 1;
+                } else if name.starts_with("go-build") && fs::remove_dir_all(&path).is_ok() {
+                    cleaned_caches += 1;
+                }
+            }
+        }
+    }
+
+    if cleaned_sandboxes > 0 || cleaned_caches > 0 {
+        eprintln!(
+            "🧹 [Host Cleanup] Purged {} orphaned sandbox dirs and {} build caches from {}",
+            cleaned_sandboxes, cleaned_caches, temp.display()
+        );
+    }
 }
 
 fn grade_task(verify_command: &str, working_dir: &Path) -> (bool, String, String) {
@@ -602,10 +634,15 @@ fn grade_task(verify_command: &str, working_dir: &Path) -> (bool, String, String
     }
 
     let program = tokens[0];
-    let cleaned_args: Vec<String> = tokens[1..]
+    let mut cleaned_args: Vec<String> = tokens[1..]
         .iter()
         .map(|t| t.trim_matches('\'').trim_matches('"').to_string())
         .collect();
+
+    // Auto-inject 30s timeout for Go tests to prevent infinite channel deadlocks
+    if program == "go" && tokens.get(1) == Some(&"test") && !tokens.iter().any(|t| t.starts_with("-timeout")) {
+        cleaned_args.insert(1, "-timeout=30s".to_string());
+    }
 
     match std::process::Command::new(program).current_dir(working_dir).args(&cleaned_args).output() {
         Ok(output) => {

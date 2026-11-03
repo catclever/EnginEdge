@@ -670,8 +670,13 @@ pub fn execute_run_verification(args: Option<Value>) -> Result<CallToolResult, J
         }
 
         let program = tokens[0];
+        let mut cmd_args: Vec<&str> = tokens[1..].to_vec();
+        if program == "go" && tokens.get(1) == Some(&"test") && !tokens.iter().any(|t| t.starts_with("-timeout")) {
+            cmd_args.insert(1, "-timeout=30s");
+        }
+
         let output = std::process::Command::new(program)
-            .args(&tokens[1..])
+            .args(&cmd_args)
             .output()
             .map_err(|e| JsonRpcError {
                 code: -32603,
