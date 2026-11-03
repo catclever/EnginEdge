@@ -6,6 +6,12 @@ Cargo.lock
 .idea/
 .vscode/
 tmp/
+bench_report.*
+bench_logs/
+datasets/test_*
+datasets/*redemption*
+datasets/*remaining*
+datasets/*reverify*
 
 
 # Added by cargo
