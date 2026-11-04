@@ -97,6 +97,10 @@ async fn handle_request(req: JsonRpcRequest, bridge: &CloudBridge, tools: &[Tool
                         "search_code_examples" => tools::execute_search_code_examples(call_params.arguments, bridge).await,
                         "fetch_doc" => tools::execute_fetch_doc(call_params.arguments, bridge).await,
                         "inspect_spec" => tools::execute_inspect_spec(call_params.arguments, bridge).await,
+                        "kb_search" => tools::execute_kb_search(call_params.arguments.unwrap_or(json!({}))),
+                        "kb_read" => tools::execute_kb_read(call_params.arguments.unwrap_or(json!({}))),
+                        "kb_record" => tools::execute_kb_record(call_params.arguments.unwrap_or(json!({}))),
+                        "kb_audit" => tools::execute_kb_audit(call_params.arguments.unwrap_or(json!({}))),
                         _ => Err(JsonRpcError {
                             code: -32601,
                             message: format!("Tool not found: {}", call_params.name),

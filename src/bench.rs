@@ -9,7 +9,7 @@ use tracing::warn;
 
 use crate::bridge::{BridgeEvent, CloudBridge};
 use crate::policy;
-use crate::tools;
+
 
 pub const OFFICIAL_DEEPSEEK_V41_FLASH_BASE: f64 = 57.0;
 pub const OFFICIAL_DEEPSEEK_V41_FLASH_1017: f64 = 71.6;
@@ -454,13 +454,28 @@ pub async fn run_benchmark(options: BenchOptions) -> anyhow::Result<BenchReport>
             if b.wait_for_connection(Duration::from_secs(15)).await {
                 let mut event_rx = b.subscribe_events();
 
+                let mut sys_prompt = "You are EnginEdge Autonomous Agent evaluating a coding benchmark. Inspect the codebase, solve the problem by writing or replacing symbols, verify with tests, and complete the task. For long implementations (>3KB), avoid single-call giant writes that risk token truncation; write the initial skeleton and split into chunks with 'append_file' (or 'append: true') or replace symbols iteratively with 'replace_symbol'.".to_string();
+                let kb_summaries = crate::knowledge::get_kb_summaries();
+                let mut kb_enabled = false;
+
+                if kb_summaries.active_summary.is_some() || kb_summaries.grave_summary.is_some() {
+                    kb_enabled = true;
+                    sys_prompt.push_str("\n\nPROJECT KNOWLEDGE BASE:\n");
+                    if let Some(active) = kb_summaries.active_summary {
+                        sys_prompt.push_str(&format!("\nActive Knowledge:\n{}\n", active));
+                    }
+                    if let Some(grave) = kb_summaries.grave_summary {
+                        sys_prompt.push_str(&format!("\nGraveyard (Anti-patterns):\n{}\n", grave));
+                    }
+                }
+
                     let init_payload = json!({
                         "type": "init",
                         "task_name": format!("bench_{}", task.id),
                         "prompt": task.prompt,
-                        "system_prompt": "You are EnginEdge Autonomous Agent evaluating a coding benchmark. Inspect the codebase, solve the problem by writing or replacing symbols, verify with tests, and complete the task. For long implementations (>3KB), avoid single-call giant writes that risk token truncation; write the initial skeleton and split into chunks with 'append_file' (or 'append: true') or replace symbols iteratively with 'replace_symbol'.",
+                        "system_prompt": sys_prompt,
                         "llm_profile": options.profile.clone().unwrap_or_else(|| "default".to_string()),
-                        "tools": tools::all_local_tool_schemas(),
+                        "tools": crate::tools::all_local_tool_schemas(kb_enabled),
                         "max_turns": options.max_turns,
                     });
 
